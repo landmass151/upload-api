@@ -1,0 +1,97 @@
+name: Remote upload
+
+on:
+  workflow_dispatch:
+    inputs:
+      api:
+        description: "API à utiliser"
+        required: true
+        type: choice
+        options:
+          - gofile
+          - fileditch
+        default: gofile
+
+      source_urls:
+        description: "URLs directes séparées par des espaces"
+        required: true
+        type: string
+
+      filename:
+        description: "Nom final optionnel pour un fichier"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    name: Upload vers ${{ inputs.api }}
+    runs-on: ubuntu-latest
+
+    outputs:
+      file_url: ${{ steps.upload.outputs.file_url }}
+      file_urls: ${{ steps.upload.outputs.file_urls }}
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer les dépendances Python
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check requests tqdm
+
+      - name: Vérifier Python et curl
+        run: |
+          python --version
+          curl --version
+
+      - name: Envoyer les fichiers
+        id: upload
+        shell: bash
+        env:
+          API: ${{ inputs.api }}
+          SOURCE_URLS: ${{ inputs.source_urls }}
+          CUSTOM_FILENAME: ${{ inputs.filename }}
+
+          GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
+          GOFILE_FOLDER_ID: ${{ secrets.GOFILE_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$CUSTOM_FILENAME" ]; then
+            python scripts/remote_upload.py \
+              --api "$API" \
+              --source-urls "$SOURCE_URLS" \
+              --filename "$CUSTOM_FILENAME"
+          else
+            python scripts/remote_upload.py \
+              --api "$API" \
+              --source-urls "$SOURCE_URLS"
+          fi
+
+      - name: Afficher les liens finaux
+        if: success()
+        shell: bash
+        env:
+          FILE_URLS: ${{ steps.upload.outputs.file_urls }}
+        run: |
+          echo "Liens générés :"
+          printf '%s\n' "$FILE_URLS"
+
+          {
+            echo "## Uploads terminés"
+            echo
+            echo "- API utilisée : \`${{ inputs.api }}\`"
+            echo
+            echo '```text'
+            printf '%s\n' "\$FILE\_URLS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
