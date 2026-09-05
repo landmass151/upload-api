@@ -25,27 +25,6 @@ GOFILE_SERVERS_ENDPOINT = "https://api.gofile.io/servers"
 FILEDITCH_ENDPOINT = "https://new.fileditch.com/upload.php"
 MULTIUP_ENDPOINT = "https://multiup.io/api/remote-upload"
 
-
-# Liste complète des hébergeurs autorisés pour MultiUp.
-#
-# La sélection effective est effectuée avec la variable d'environnement
-# MULTIUP_HOSTS.
-#
-# Exemples :
-#
-#   MULTIUP_HOSTS=all
-#   MULTIUP_HOSTS="1fichier.com"
-#   MULTIUP_HOSTS="1fichier.com, fireload.com"
-#   MULTIUP_HOSTS="1fichier.com fireload.com"
-AVAILABLE_MULTIUP_HOSTS = (
-    "1fichier.com",
-    "fireload.com",
-    "hexload.com",
-    "rapidgator.net",
-    "vikingfile.com",
-)
-
-
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 10
 CHUNK_SIZE = 10 * 1024 * 1024
@@ -195,92 +174,6 @@ def parse_custom_filenames(
 
 
 # ============================================================================
-# SÉLECTION DES HÉBERGEURS MULTIUP
-# ============================================================================
-
-
-def get_selected_multiup_hosts() -> tuple[str, ...]:
-    """
-    Retourne les hébergeurs MultiUp sélectionnés.
-
-    La variable MULTIUP_HOSTS accepte :
-
-        all
-
-    ou une liste séparée par des virgules :
-
-        1fichier.com, fireload.com
-
-    ou une liste séparée par des espaces :
-
-        1fichier.com fireload.com
-
-    Les noms sont comparés sans tenir compte de la casse.
-    """
-
-    raw_hosts = get_environment_value("MULTIUP_HOSTS")
-
-    if not raw_hosts:
-        return AVAILABLE_MULTIUP_HOSTS
-
-    requested_hosts = [
-        item.strip()
-        for item in raw_hosts.replace(",", " ").split()
-        if item.strip()
-    ]
-
-    if not requested_hosts:
-        return AVAILABLE_MULTIUP_HOSTS
-
-    if any(
-        requested_host.lower() == "all"
-        for requested_host in requested_hosts
-    ):
-        if len(requested_hosts) > 1:
-            raise ValueError(
-                'La valeur "all" ne peut pas être combinée '
-                "avec un autre hébergeur."
-            )
-
-        return AVAILABLE_MULTIUP_HOSTS
-
-    available_by_lowercase = {
-        host.lower(): host
-        for host in AVAILABLE_MULTIUP_HOSTS
-    }
-
-    selected_hosts: list[str] = []
-    unknown_hosts: list[str] = []
-
-    for requested_host in requested_hosts:
-        canonical_host = available_by_lowercase.get(
-            requested_host.lower()
-        )
-
-        if canonical_host is None:
-            unknown_hosts.append(requested_host)
-            continue
-
-        if canonical_host not in selected_hosts:
-            selected_hosts.append(canonical_host)
-
-    if unknown_hosts:
-        raise ValueError(
-            "Hébergeur(s) MultiUp inconnu(s) : "
-            + ", ".join(unknown_hosts)
-            + "\nHébergeurs disponibles : "
-            + ", ".join(AVAILABLE_MULTIUP_HOSTS)
-        )
-
-    if not selected_hosts:
-        raise ValueError(
-            "Aucun hébergeur MultiUp valide n'a été sélectionné."
-        )
-
-    return tuple(selected_hosts)
-
-
-# ============================================================================
 # SORTIES GITHUB ACTIONS
 # ============================================================================
 
@@ -291,8 +184,6 @@ def write_github_output(
 ) -> None:
     """
     Écrit une valeur dans GITHUB_OUTPUT.
-
-    Le format EOF autorise les valeurs multilignes.
     """
 
     output_path = os.environ.get("GITHUB_OUTPUT")
@@ -532,14 +423,12 @@ def upload_multiup_remote(
     """
     Demande à MultiUp de récupérer directement le fichier depuis l'URL.
 
-    Le fichier n'est pas téléchargé sur le runner GitHub.
-    MultiUp effectue lui-même le téléchargement distant.
+    Aucun hébergeur n'est envoyé dans la requête.
+    MultiUp utilise sa configuration par défaut.
     """
 
     username = get_environment_value("MULTIUP_USERNAME")
     password = os.environ.get("MULTIUP_PASSWORD", "")
-
-    selected_hosts = get_selected_multiup_hosts()
 
     payload: dict[str, str] = {
         "link": source_url,
@@ -551,17 +440,6 @@ def upload_multiup_remote(
 
     if password:
         payload["password"] = password
-
-    for index, host in enumerate(
-        selected_hosts,
-        start=1,
-    ):
-        payload[f"host{index}"] = host
-
-    print(
-        "Hébergeurs MultiUp sélectionnés : "
-        + ", ".join(selected_hosts)
-    )
 
     try:
         response = requests.post(
@@ -690,8 +568,6 @@ def upload_stream(
     if upload_broken and source_process.poll() is None:
         source_process.terminate()
 
-    # Le flux stdin a déjà été fermé manuellement.
-    # On empêche communicate() de tenter de le fermer une deuxième fois.
     upload_process.stdin = None
 
     upload_stdout, upload_stderr = upload_process.communicate()
@@ -708,7 +584,6 @@ def upload_stream(
     upload_error = decode_bytes(upload_stderr)
     source_error = decode_bytes(source_stderr)
 
-    # Le code 141 correspond généralement à SIGPIPE.
     source_failed = source_return_code not in (0, 141)
 
     upload_failed = (
@@ -1124,21 +999,6 @@ def main() -> int:
     """
 
     args = parse_arguments()
-
-    if args.api == "multiup":
-        try:
-            selected_hosts = get_selected_multiup_hosts()
-        except ValueError as error:
-            print(
-                f"Erreur : {error}",
-                file=sys.stderr,
-            )
-            return 1
-
-        print(
-            "Hébergeurs MultiUp sélectionnés : "
-            + ", ".join(selected_hosts)
-        )
 
     source_urls = args.source_urls.split()
 
