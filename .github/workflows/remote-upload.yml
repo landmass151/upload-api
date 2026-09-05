@@ -16,7 +16,6 @@ on:
       source_urls:
         description: >-
           URLs directes séparées par des espaces.
-          Exemple : https://site.test/a.zip https://site.test/b.iso
         required: true
         type: string
 
@@ -24,17 +23,12 @@ on:
         description: >-
           Noms personnalisés optionnels, dans le même ordre que les URL.
           Entourer les noms contenant des espaces avec des guillemets.
-          Utiliser <echap> pour détecter automatiquement le nom depuis l'URL.
-          Exemple : "mon fichier.zip" <echap> image.iso.
-          Si moins de noms sont fournis, les noms restants sont détectés
-          depuis les URL. Si plus de noms sont fournis, le workflow s'arrête.
         required: false
         type: string
 
       escape:
         description: >-
           Active l'utilisation de <echap> pour ignorer un nom personnalisé
-          et détecter automatiquement le nom depuis l'URL.
         required: false
         type: boolean
         default: false
