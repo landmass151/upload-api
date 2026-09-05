@@ -30,13 +30,14 @@ def get_filename(
     custom_filename: str | None,
 ) -> str:
     """
-    Détermine et nettoie le nom du fichier.
+    Retourne le nom personnalisé ou détecte le nom depuis l'URL.
     """
 
     if custom_filename and custom_filename.strip():
         filename = custom_filename.strip()
     else:
         parsed_url = urlparse(source_url)
+
         filename = unquote(
             PurePosixPath(parsed_url.path).name
         )
@@ -58,13 +59,24 @@ def get_filename(
 def parse_custom_filenames(
     raw_filenames: str | None,
     escape_enabled: bool,
-) -> list[str]:
+) -> list[str | None]:
     """
-    Analyse plusieurs noms personnalisés.
+    Analyse les noms personnalisés.
+
+    <echap> représente une position sans nom personnalisé.
+    Dans ce cas, le nom est détecté automatiquement depuis l'URL.
 
     Exemple :
 
-        "archive Linux.zip" "image disque.iso" rapport.pdf
+        "archive Linux.zip" <echap> rapport.pdf
+
+    Résultat :
+
+        [
+            "archive Linux.zip",
+            None,
+            "rapport.pdf",
+        ]
     """
 
     if not raw_filenames or not raw_filenames.strip():
@@ -81,16 +93,18 @@ def parse_custom_filenames(
             "Vérifiez les guillemets."
         ) from error
 
-    if escape_enabled:
-        filenames = [
-            filename.replace(
-                ESCAPE_TOKEN,
-                '"',
-            )
-            for filename in filenames
-        ]
+    if not escape_enabled:
+        return filenames
 
-    return filenames
+    parsed_filenames: list[str | None] = []
+
+    for filename in filenames:
+        if filename == ESCAPE_TOKEN:
+            parsed_filenames.append(None)
+        else:
+            parsed_filenames.append(filename)
+
+    return parsed_filenames
 
 
 def write_github_output(
@@ -195,8 +209,7 @@ def get_gofile_server() -> str:
 
 def escape_curl_form_filename(filename: str) -> str:
     """
-    Échappe les caractères spéciaux utilisés par
-    la syntaxe --form de curl.
+    Échappe les caractères spéciaux pour curl --form.
     """
 
     return (
@@ -211,7 +224,7 @@ def build_upload_command(
     filename: str,
 ) -> list[str]:
     """
-    Construit la commande curl de l'API sélectionnée.
+    Construit la commande curl correspondant à l'API.
     """
 
     if api == "fileditch":
@@ -311,7 +324,7 @@ def upload_once(
 ) -> tuple[int, str, str, int]:
     """
     Télécharge la source et envoie son contenu directement
-    vers GoFile ou FileDitch sans créer de fichier temporaire.
+    vers GoFile ou FileDitch sans fichier temporaire.
     """
 
     source_command = [
@@ -417,8 +430,6 @@ def upload_once(
         if source_process.poll() is None:
             source_process.terminate()
 
-    # Empêche communicate() de tenter de réécrire
-    # dans un stdin déjà fermé.
     upload_process.stdin = None
 
     upload_stdout, upload_stderr = (
@@ -448,7 +459,7 @@ def upload_once(
         errors="replace",
     )
 
-    # Le code 141 correspond généralement à SIGPIPE.
+    # 141 correspond généralement à SIGPIPE.
     source_failed = source_return_code not in (0, 141)
 
     upload_failed = (
@@ -499,7 +510,7 @@ def parse_response(
     uploaded_size: int,
 ) -> tuple[str, str, object]:
     """
-    Analyse la réponse JSON reçue.
+    Analyse la réponse JSON de l'API.
     """
 
     try:
@@ -633,9 +644,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--source-urls",
         required=True,
-        help=(
-            "URLs directes séparées par des espaces."
-        ),
+        help="URLs directes séparées par des espaces.",
     )
 
     parser.add_argument(
@@ -652,8 +661,8 @@ def parse_arguments() -> argparse.Namespace:
         "--escape",
         action="store_true",
         help=(
-            "Remplace <echap> par un guillemet double "
-            "dans les noms personnalisés."
+            "Interprète <echap> comme une position sans "
+            "nom personnalisé."
         ),
     )
 
@@ -710,10 +719,26 @@ def main() -> int:
             )
             return 1
 
-    if custom_filenames:
+    custom_count = sum(
+        filename is not None
+        for filename in custom_filenames
+    )
+
+    skipped_count = sum(
+        filename is None
+        for filename in custom_filenames
+    )
+
+    if custom_count:
         print(
-            f"{len(custom_filenames)} "
-            "nom(s) personnalisé(s) détecté(s)."
+            f"{custom_count} nom(s) personnalisé(s) "
+            "détecté(s)."
+        )
+
+    if skipped_count:
+        print(
+            f"{skipped_count} position(s) utiliseront "
+            "le nom détecté depuis l'URL."
         )
 
     remaining_count = (
@@ -722,17 +747,17 @@ def main() -> int:
 
     if remaining_count > 0:
         print(
-            f"{remaining_count} fichier(s) utiliseront "
-            "le nom détecté depuis leur URL."
+            f"{remaining_count} fichier(s) restant(s) "
+            "utiliseront le nom détecté depuis leur URL."
         )
 
-    all_file_urls = []
+    all_file_urls: list[str] = []
 
     for index, source_url in enumerate(
         source_urls,
         start=1,
     ):
-        custom_filename = None
+        custom_filename: str | None = None
         custom_index = index - 1
 
         if custom_index < len(custom_filenames):
