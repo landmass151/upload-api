@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ FILEDITCH_ENDPOINT = "https://new.fileditch.com/upload.php"
 MAX_ATTEMPTS = 3
 CONNECT_TIMEOUT = "60"
 CHUNK_SIZE = 1024 * 1024
+ESCAPE_TOKEN = "<echap>"
 
 
 def get_filename(
@@ -28,7 +30,7 @@ def get_filename(
     custom_filename: str | None,
 ) -> str:
     """
-    Détermine le nom du fichier.
+    Détermine et nettoie le nom du fichier.
     """
 
     if custom_filename and custom_filename.strip():
@@ -45,10 +47,50 @@ def get_filename(
     filename = filename.replace("/", "_")
     filename = filename.replace("\\", "_")
     filename = filename.replace("\x00", "_")
-    filename = filename.replace(" ", "_")
+    filename = filename.replace("\r", "_")
+    filename = filename.replace("\n", "_")
+    filename = filename.replace(";", "_")
     filename = filename.strip()
 
     return filename or "remote_file"
+
+
+def parse_custom_filenames(
+    raw_filenames: str | None,
+    escape_enabled: bool,
+) -> list[str]:
+    """
+    Analyse plusieurs noms personnalisés.
+
+    Exemple :
+
+        "archive Linux.zip" "image disque.iso" rapport.pdf
+    """
+
+    if not raw_filenames or not raw_filenames.strip():
+        return []
+
+    try:
+        filenames = shlex.split(
+            raw_filenames,
+            posix=True,
+        )
+    except ValueError as error:
+        raise ValueError(
+            "Syntaxe invalide pour les noms personnalisés. "
+            "Vérifiez les guillemets."
+        ) from error
+
+    if escape_enabled:
+        filenames = [
+            filename.replace(
+                ESCAPE_TOKEN,
+                '"',
+            )
+            for filename in filenames
+        ]
+
+    return filenames
 
 
 def write_github_output(
@@ -64,7 +106,11 @@ def write_github_output(
     if not output_path:
         return
 
-    with open(output_path, "a", encoding="utf-8") as output_file:
+    with open(
+        output_path,
+        "a",
+        encoding="utf-8",
+    ) as output_file:
         output_file.write(f"{name}<<EOF\n")
         output_file.write(value)
         output_file.write("\nEOF\n")
@@ -85,7 +131,11 @@ def write_github_summary(
     if not summary_path:
         return
 
-    with open(summary_path, "a", encoding="utf-8") as summary:
+    with open(
+        summary_path,
+        "a",
+        encoding="utf-8",
+    ) as summary:
         summary.write("## Upload terminé\n\n")
         summary.write(f"- API : `{api}`\n")
         summary.write(f"- Fichier : `{filename}`\n")
@@ -106,36 +156,27 @@ def get_gofile_server() -> str:
 
     payload = response.json()
     data = payload.get("data", {})
-
     servers = data.get("servers")
 
     if isinstance(servers, dict):
-        for value in servers.values():
-            if isinstance(value, str) and value:
-                return value
+        values = servers.values()
+    elif isinstance(servers, list):
+        values = servers
+    else:
+        values = []
 
-            if isinstance(value, dict):
-                for key in (
-                    "name",
-                    "server",
-                    "hostname",
-                ):
-                    if value.get(key):
-                        return str(value[key])
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
 
-    if isinstance(servers, list):
-        for value in servers:
-            if isinstance(value, str) and value:
-                return value
-
-            if isinstance(value, dict):
-                for key in (
-                    "name",
-                    "server",
-                    "hostname",
-                ):
-                    if value.get(key):
-                        return str(value[key])
+        if isinstance(value, dict):
+            for key in (
+                "name",
+                "server",
+                "hostname",
+            ):
+                if value.get(key):
+                    return str(value[key])
 
     direct_server = data.get("server")
 
@@ -149,6 +190,19 @@ def get_gofile_server() -> str:
             indent=2,
             ensure_ascii=False,
         )
+    )
+
+
+def escape_curl_form_filename(filename: str) -> str:
+    """
+    Échappe les caractères spéciaux utilisés par
+    la syntaxe --form de curl.
+    """
+
+    return (
+        filename
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
     )
 
 
@@ -205,6 +259,10 @@ def build_upload_command(
             "",
         ).strip()
 
+        safe_filename = escape_curl_form_filename(
+            filename
+        )
+
         command = [
             "curl",
             "-4",
@@ -212,7 +270,7 @@ def build_upload_command(
             "--request",
             "POST",
             "--form",
-            f"file=@-;filename={filename}",
+            f"file=@-;filename={safe_filename}",
             "--connect-timeout",
             CONNECT_TIMEOUT,
             "--max-time",
@@ -359,6 +417,10 @@ def upload_once(
         if source_process.poll() is None:
             source_process.terminate()
 
+    # Empêche communicate() de tenter de réécrire
+    # dans un stdin déjà fermé.
+    upload_process.stdin = None
+
     upload_stdout, upload_stderr = (
         upload_process.communicate()
     )
@@ -442,7 +504,6 @@ def parse_response(
 
     try:
         response = json.loads(response_text)
-
     except json.JSONDecodeError as error:
         raise RuntimeError(
             "Réponse JSON invalide :\n"
@@ -506,6 +567,16 @@ def parse_response(
             response,
         )
 
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                "Réponse GoFile invalide :\n"
+                + json.dumps(
+                    response,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+
         file_url = (
             data.get("downloadPage")
             or data.get("downloadUrl")
@@ -568,12 +639,21 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--filename",
+        "--filenames",
         required=False,
         help=(
-            "Nom final optionnel. "
-            "Sans cette option, le nom est détecté "
-            "depuis chaque URL."
+            "Noms personnalisés séparés par des espaces. "
+            "Les noms contenant des espaces doivent être "
+            "entre guillemets."
+        ),
+    )
+
+    parser.add_argument(
+        "--escape",
+        action="store_true",
+        help=(
+            "Remplace <echap> par un guillemet double "
+            "dans les noms personnalisés."
         ),
     )
 
@@ -592,7 +672,33 @@ def main() -> int:
         )
         return 1
 
-    all_file_urls = []
+    try:
+        custom_filenames = parse_custom_filenames(
+            args.filenames,
+            args.escape,
+        )
+    except ValueError as error:
+        print(
+            f"Erreur : {error}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if len(custom_filenames) > len(source_urls):
+        print(
+            "Erreur : le nombre de noms personnalisés "
+            "est supérieur au nombre d'URL.",
+            file=sys.stderr,
+        )
+        print(
+            f"URL détectées : {len(source_urls)}",
+            file=sys.stderr,
+        )
+        print(
+            f"Noms détectés : {len(custom_filenames)}",
+            file=sys.stderr,
+        )
+        return 1
 
     for source_url in source_urls:
         if not source_url.startswith(
@@ -604,13 +710,39 @@ def main() -> int:
             )
             return 1
 
+    if custom_filenames:
+        print(
+            f"{len(custom_filenames)} "
+            "nom(s) personnalisé(s) détecté(s)."
+        )
+
+    remaining_count = (
+        len(source_urls) - len(custom_filenames)
+    )
+
+    if remaining_count > 0:
+        print(
+            f"{remaining_count} fichier(s) utiliseront "
+            "le nom détecté depuis leur URL."
+        )
+
+    all_file_urls = []
+
     for index, source_url in enumerate(
         source_urls,
         start=1,
     ):
+        custom_filename = None
+        custom_index = index - 1
+
+        if custom_index < len(custom_filenames):
+            custom_filename = custom_filenames[
+                custom_index
+            ]
+
         filename = get_filename(
             source_url,
-            args.filename,
+            custom_filename,
         )
 
         print("\n" + "=" * 70)
@@ -662,13 +794,22 @@ def main() -> int:
                     )
 
                 except RuntimeError as error:
-                    print(f"Erreur : {error}")
+                    print(
+                        f"Erreur : {error}",
+                        file=sys.stderr,
+                    )
                     return 1
 
-                print("\nUpload terminé avec succès.")
+                print(
+                    "\nUpload terminé avec succès."
+                )
                 print(f"URL     : {file_url}")
-                print(f"Fichier : {final_filename}")
-                print(f"Taille  : {file_size} octets")
+                print(
+                    f"Fichier : {final_filename}"
+                )
+                print(
+                    f"Taille  : {file_size} octets"
+                )
 
                 all_file_urls.append(file_url)
 
@@ -693,7 +834,7 @@ def main() -> int:
                 wait_seconds = attempt * 10
 
                 print(
-                    f"Nouvelle tentative dans "
+                    "Nouvelle tentative dans "
                     f"{wait_seconds} secondes..."
                 )
 
@@ -704,7 +845,10 @@ def main() -> int:
                 f"\nÉchec définitif : {source_url}",
                 file=sys.stderr,
             )
-            print(last_error, file=sys.stderr)
+            print(
+                last_error,
+                file=sys.stderr,
+            )
             return 1
 
     if not all_file_urls:
@@ -716,14 +860,12 @@ def main() -> int:
 
     all_urls_text = "\n".join(all_file_urls)
 
-    # Tous les liens, un par ligne.
     write_github_output(
         "file_urls",
         all_urls_text,
     )
 
-    # Compatibilité avec l'ancien workflow :
-    # contient le dernier lien généré.
+    # Compatibilité avec l'ancien workflow.
     write_github_output(
         "file_url",
         all_file_urls[-1],
