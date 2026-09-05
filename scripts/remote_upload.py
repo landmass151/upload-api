@@ -39,7 +39,7 @@ MULTIUP_ENDPOINT = "https://multiup.io/api/remote-upload"
 #   MULTIUP_HOSTS="1fichier.com FireLoad.com"
 AVAILABLE_MULTIUP_HOSTS = (
     "1fichier.com",
-    "fireLoad.com",
+    "fireload.com",
     "hexload.com",
     "rapidgator.net",
     "vikingfile.com",
