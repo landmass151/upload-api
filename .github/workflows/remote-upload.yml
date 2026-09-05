@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       api:
-        description: "API à utiliser"
+        description: "API à utiliser :"
         required: true
         type: choice
         options:
@@ -15,20 +15,20 @@ on:
 
       source_urls:
         description: >-
-          URLs directes séparées par des espaces.
+          URLs directes séparées par des espaces :
         required: true
         type: string
 
       filename:
         description: >-
           Noms personnalisés optionnels, dans le même ordre que les URL.
-          Entourer les noms contenant des espaces avec des guillemets.
+          Entourer les noms contenant des espaces avec des guillemets :
         required: false
         type: string
 
       escape:
         description: >-
-          Active l'utilisation de <echap> pour ignorer un nom personnalisé
+          Active l'utilisation de <echap> pour ignorer un nom personnalisé :
         required: false
         type: boolean
         default: false
