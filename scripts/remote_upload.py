@@ -18,24 +18,26 @@ from tqdm import tqdm
 
 
 # ============================================================================
-# CONFIGURATION MODIFIABLE
-# ============================================================================
-#
-# Les modifications manuelles fréquentes peuvent être effectuées ici.
-# Le reste du script ne devrait normalement pas nécessiter de modification.
+# CONFIGURATION
 # ============================================================================
 
-
-# API utilisées
 GOFILE_SERVERS_ENDPOINT = "https://api.gofile.io/servers"
 FILEDITCH_ENDPOINT = "https://new.fileditch.com/upload.php"
 MULTIUP_ENDPOINT = "https://multiup.io/api/remote-upload"
 
 
-# Hébergeurs sélectionnés pour MultiUp.
+# Liste complète des hébergeurs autorisés pour MultiUp.
 #
-# Pour modifier les hébergeurs, changez uniquement cette liste.
-MULTIUP_HOSTS = (
+# La sélection effective est effectuée avec la variable d'environnement
+# MULTIUP_HOSTS.
+#
+# Exemples :
+#
+#   MULTIUP_HOSTS=all
+#   MULTIUP_HOSTS="1fichier.com"
+#   MULTIUP_HOSTS="1fichier.com, FireLoad.com"
+#   MULTIUP_HOSTS="1fichier.com FireLoad.com"
+AVAILABLE_MULTIUP_HOSTS = (
     "1fichier.com",
     "fireload.com",
     "hexload.com",
@@ -44,33 +46,11 @@ MULTIUP_HOSTS = (
 )
 
 
-# Nombre maximal de tentatives pour chaque fichier.
 MAX_ATTEMPTS = 3
-
-
-# Délai d'attente entre deux tentatives.
-#
-# La première attente sera :
-#   1 x RETRY_DELAY_SECONDS
-#
-# La deuxième attente sera :
-#   2 x RETRY_DELAY_SECONDS
 RETRY_DELAY_SECONDS = 10
-
-
-# Taille des blocs transférés.
 CHUNK_SIZE = 10 * 1024 * 1024
-
-
-# Délai maximal de connexion à une API ou à une URL source.
 CONNECT_TIMEOUT = 60
-
-
-# Valeur utilisée dans le champ des noms personnalisés.
 ESCAPE_TOKEN = "<echap>"
-
-
-# Version minimale des URL autorisées.
 ALLOWED_URL_SCHEMES = ("http://", "https://")
 
 
@@ -212,6 +192,92 @@ def parse_custom_filenames(
         None if filename == ESCAPE_TOKEN else filename
         for filename in filenames
     ]
+
+
+# ============================================================================
+# SÉLECTION DES HÉBERGEURS MULTIUP
+# ============================================================================
+
+
+def get_selected_multiup_hosts() -> tuple[str, ...]:
+    """
+    Retourne les hébergeurs MultiUp sélectionnés.
+
+    La variable MULTIUP_HOSTS accepte :
+
+        all
+
+    ou une liste séparée par des virgules :
+
+        1fichier.com, FireLoad.com
+
+    ou une liste séparée par des espaces :
+
+        1fichier.com FireLoad.com
+
+    Les noms sont comparés sans tenir compte de la casse.
+    """
+
+    raw_hosts = get_environment_value("MULTIUP_HOSTS")
+
+    if not raw_hosts:
+        return AVAILABLE_MULTIUP_HOSTS
+
+    requested_hosts = [
+        item.strip()
+        for item in raw_hosts.replace(",", " ").split()
+        if item.strip()
+    ]
+
+    if not requested_hosts:
+        return AVAILABLE_MULTIUP_HOSTS
+
+    if any(
+        requested_host.lower() == "all"
+        for requested_host in requested_hosts
+    ):
+        if len(requested_hosts) > 1:
+            raise ValueError(
+                'La valeur "all" ne peut pas être combinée '
+                "avec un autre hébergeur."
+            )
+
+        return AVAILABLE_MULTIUP_HOSTS
+
+    available_by_lowercase = {
+        host.lower(): host
+        for host in AVAILABLE_MULTIUP_HOSTS
+    }
+
+    selected_hosts: list[str] = []
+    unknown_hosts: list[str] = []
+
+    for requested_host in requested_hosts:
+        canonical_host = available_by_lowercase.get(
+            requested_host.lower()
+        )
+
+        if canonical_host is None:
+            unknown_hosts.append(requested_host)
+            continue
+
+        if canonical_host not in selected_hosts:
+            selected_hosts.append(canonical_host)
+
+    if unknown_hosts:
+        raise ValueError(
+            "Hébergeur(s) MultiUp inconnu(s) : "
+            + ", ".join(unknown_hosts)
+            + "\nHébergeurs disponibles : "
+            + ", ".join(AVAILABLE_MULTIUP_HOSTS)
+        )
+
+    if not selected_hosts:
+        raise ValueError(
+            "Aucun hébergeur MultiUp valide n'a été sélectionné."
+        )
+
+    return tuple(selected_hosts)
 
 
 # ============================================================================
@@ -473,6 +539,8 @@ def upload_multiup_remote(
     username = get_environment_value("MULTIUP_USERNAME")
     password = os.environ.get("MULTIUP_PASSWORD", "")
 
+    selected_hosts = get_selected_multiup_hosts()
+
     payload: dict[str, str] = {
         "link": source_url,
         "fileName": filename,
@@ -485,14 +553,14 @@ def upload_multiup_remote(
         payload["password"] = password
 
     for index, host in enumerate(
-        MULTIUP_HOSTS,
+        selected_hosts,
         start=1,
     ):
         payload[f"host{index}"] = host
 
     print(
         "Hébergeurs MultiUp sélectionnés : "
-        + ", ".join(MULTIUP_HOSTS)
+        + ", ".join(selected_hosts)
     )
 
     try:
@@ -542,17 +610,6 @@ def upload_stream(
     Télécharge la source et transmet son contenu à l'API.
 
     Le fichier n'est pas stocké entièrement sur le disque.
-    Le transfert s'effectue par flux :
-
-        URL source
-            ↓
-        curl téléchargement
-            ↓
-        Python
-            ↓
-        curl upload
-            ↓
-        API finale
     """
 
     source_process = subprocess.Popen(
@@ -634,8 +691,7 @@ def upload_stream(
         source_process.terminate()
 
     # Le flux stdin a déjà été fermé manuellement.
-    # Le mettre à None empêche communicate() de tenter de le fermer
-    # une deuxième fois.
+    # On empêche communicate() de tenter de le fermer une deuxième fois.
     upload_process.stdin = None
 
     upload_stdout, upload_stderr = upload_process.communicate()
@@ -790,8 +846,6 @@ def parse_response(
                 )
             )
 
-        # Correction de l'erreur présente dans le code original :
-        # il faut utiliser `filename`, et non `f` suivi de `ilename`.
         final_filename = response.get(
             "fileName",
             filename,
@@ -1071,6 +1125,21 @@ def main() -> int:
 
     args = parse_arguments()
 
+    if args.api == "multiup":
+        try:
+            selected_hosts = get_selected_multiup_hosts()
+        except ValueError as error:
+            print(
+                f"Erreur : {error}",
+                file=sys.stderr,
+            )
+            return 1
+
+        print(
+            "Hébergeurs MultiUp sélectionnés : "
+            + ", ".join(selected_hosts)
+        )
+
     source_urls = args.source_urls.split()
 
     if not source_urls:
@@ -1191,14 +1260,13 @@ def main() -> int:
 
     all_urls_text = "\n".join(all_file_urls)
 
-    # Toutes les URL, une par ligne.
     write_github_output(
         "file_urls",
         all_urls_text,
     )
 
-    # Compatibilité avec l'ancien fonctionnement.
-    # Cette sortie contient uniquement la dernière URL.
+    # Compatibilité avec l'ancien fonctionnement :
+    # cette sortie contient uniquement la dernière URL.
     write_github_output(
         "file_url",
         all_file_urls[-1],

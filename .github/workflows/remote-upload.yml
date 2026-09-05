@@ -39,6 +39,16 @@ on:
         type: boolean
         default: false
 
+      multiup_hosts:
+        description: >-
+          Hébergeurs MultiUp à utiliser, séparés par des virgules ou des espaces.
+          Utiliser "all" pour sélectionner tous les hébergeurs.
+          Valeurs disponibles : 1fichier.com, FireLoad.com, HexLoad.com,
+          RapidGator.net, VikingFile.com.
+        required: false
+        type: string
+        default: all
+
 permissions:
   contents: read
 
@@ -78,6 +88,7 @@ jobs:
           SOURCE_URLS: ${{ inputs.source_urls }}
           CUSTOM_FILENAMES: ${{ inputs.filename }}
           ENABLE_ESCAPE: ${{ inputs.escape }}
+          MULTIUP_HOSTS: ${{ inputs.multiup_hosts }}
 
           GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
           GOFILE_FOLDER_ID: ${{ secrets.GOFILE_FOLDER_ID }}
