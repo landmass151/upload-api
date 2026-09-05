@@ -28,7 +28,7 @@ on:
 
       escape:
         description: >-
-          Active l'utilisation de <echap> pour ignorer un nom personnalisé :
+          Active l'utilisation de <echap> pour ignorer un nom personnalisé.
         required: false
         type: boolean
         default: false
