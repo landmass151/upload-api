@@ -10,6 +10,7 @@ on:
         options:
           - gofile
           - fileditch
+          - multiup
         default: gofile
 
       source_urls:
@@ -81,16 +82,23 @@ jobs:
           GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
           GOFILE_FOLDER_ID: ${{ secrets.GOFILE_FOLDER_ID }}
 
+          MULTIUP_USERNAME: ${{ secrets.MULTIUP_USERNAME }}
+          MULTIUP_PASSWORD: ${{ secrets.MULTIUP_PASSWORD }}
+
         run: |
           set -euo pipefail
 
-          command=(python scripts/remote_upload.py)
-
-          command+=(--api "$API")
-          command+=(--source-urls "$SOURCE_URLS")
+          command=(
+            python scripts/remote_upload.py
+            --api "$API"
+            --source-urls "$SOURCE_URLS"
+          )
 
           if [ -n "$CUSTOM_FILENAMES" ]; then
-            command+=(--filenames "$CUSTOM_FILENAMES")
+            command+=(
+              --filenames
+              "$CUSTOM_FILENAMES"
+            )
           fi
 
           if [ "$ENABLE_ESCAPE" = "true" ]; then
