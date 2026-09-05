@@ -13,14 +13,29 @@ on:
         default: gofile
 
       source_urls:
-        description: "URLs directes séparées par des espaces"
+        description: >-
+          URLs directes séparées par des espaces.
+          Exemple : https://site.test/a.zip https://site.test/b.iso
         required: true
         type: string
 
       filename:
-        description: "Nom final optionnel pour un fichier"
+        description: >-
+          Noms personnalisés optionnels, dans le même ordre que les URL.
+          Entourer les noms contenant des espaces avec des guillemets.
+          Exemple : "mon fichier.zip" image.iso.
+          Si moins de noms sont fournis, les noms restants sont détectés
+          depuis les URL. Si plus de noms sont fournis, le workflow s'arrête.
         required: false
         type: string
+
+      escape:
+        description: >-
+          Active le remplacement de <echap> par un guillemet double.
+          Exemple : "rapport<echap>final.pdf"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -59,23 +74,29 @@ jobs:
         env:
           API: ${{ inputs.api }}
           SOURCE_URLS: ${{ inputs.source_urls }}
-          CUSTOM_FILENAME: ${{ inputs.filename }}
+          CUSTOM_FILENAMES: ${{ inputs.filename }}
+          ENABLE_ESCAPE: ${{ inputs.escape }}
 
           GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
           GOFILE_FOLDER_ID: ${{ secrets.GOFILE_FOLDER_ID }}
+
         run: |
           set -euo pipefail
 
-          if [ -n "$CUSTOM_FILENAME" ]; then
-            python scripts/remote_upload.py \
-              --api "$API" \
-              --source-urls "$SOURCE_URLS" \
-              --filename "$CUSTOM_FILENAME"
-          else
-            python scripts/remote_upload.py \
-              --api "$API" \
-              --source-urls "$SOURCE_URLS"
+          command=(python scripts/remote_upload.py)
+
+          command+=(--api "$API")
+          command+=(--source-urls "$SOURCE_URLS")
+
+          if [ -n "$CUSTOM_FILENAMES" ]; then
+            command+=(--filenames "$CUSTOM_FILENAMES")
           fi
+
+          if [ "$ENABLE_ESCAPE" = "true" ]; then
+            command+=(--escape)
+          fi
+
+          "${command[@]}"
 
       - name: Afficher les liens finaux
         if: success()
