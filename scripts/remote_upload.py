@@ -10,19 +10,142 @@ import subprocess
 import sys
 import time
 from pathlib import PurePosixPath
+from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
 import requests
 from tqdm import tqdm
 
 
+# ============================================================================
+# CONFIGURATION MODIFIABLE
+# ============================================================================
+#
+# Les modifications manuelles fréquentes peuvent être effectuées ici.
+# Le reste du script ne devrait normalement pas nécessiter de modification.
+# ============================================================================
+
+
+# API utilisées
 GOFILE_SERVERS_ENDPOINT = "https://api.gofile.io/servers"
 FILEDITCH_ENDPOINT = "https://new.fileditch.com/upload.php"
+MULTIUP_ENDPOINT = "https://multiup.io/api/remote-upload"
 
+
+# Hébergeurs sélectionnés pour MultiUp.
+#
+# Pour modifier les hébergeurs, changez uniquement cette liste.
+MULTIUP_HOSTS = (
+    "1fichier.com",
+    "FireLoad.com",
+    "HexLoad.com",
+    "RapidGator.net",
+    "VikingFile.com",
+)
+
+
+# Nombre maximal de tentatives pour chaque fichier.
 MAX_ATTEMPTS = 3
-CONNECT_TIMEOUT = "60"
+
+
+# Délai d'attente entre deux tentatives.
+#
+# La première attente sera :
+#   1 x RETRY_DELAY_SECONDS
+#
+# La deuxième attente sera :
+#   2 x RETRY_DELAY_SECONDS
+RETRY_DELAY_SECONDS = 10
+
+
+# Taille des blocs transférés.
 CHUNK_SIZE = 1024 * 1024
+
+
+# Délai maximal de connexion à une API ou à une URL source.
+CONNECT_TIMEOUT = 60
+
+
+# Valeur utilisée dans le champ des noms personnalisés.
 ESCAPE_TOKEN = "<echap>"
+
+
+# Version minimale des URL autorisées.
+ALLOWED_URL_SCHEMES = ("http://", "https://")
+
+
+# ============================================================================
+# OUTILS GÉNÉRAUX
+# ============================================================================
+
+
+def get_environment_value(name: str) -> str:
+    """
+    Retourne une variable d'environnement nettoyée.
+    """
+
+    return os.environ.get(name, "").strip()
+
+
+def print_json_error(prefix: str, payload: object) -> str:
+    """
+    Formate proprement une erreur contenant une réponse JSON.
+    """
+
+    return (
+        f"{prefix}\n"
+        + json.dumps(
+            payload,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+
+
+def decode_bytes(value: bytes) -> str:
+    """
+    Convertit des octets en texte UTF-8 sans provoquer d'erreur.
+    """
+
+    return value.decode(
+        "utf-8",
+        errors="replace",
+    )
+
+
+def is_valid_source_url(source_url: str) -> bool:
+    """
+    Vérifie que l'URL utilise HTTP ou HTTPS.
+    """
+
+    return source_url.startswith(ALLOWED_URL_SCHEMES)
+
+
+# ============================================================================
+# GESTION DES NOMS DE FICHIERS
+# ============================================================================
+
+
+def clean_filename(filename: str) -> str:
+    """
+    Nettoie un nom de fichier pour éviter les caractères problématiques.
+    """
+
+    replacements = {
+        "/": "_",
+        "\\": "_",
+        "\x00": "_",
+        "\r": "_",
+        "\n": "_",
+        ";": "_",
+    }
+
+    for old_value, new_value in replacements.items():
+        filename = filename.replace(old_value, new_value)
+
+    filename = filename.strip()
+
+    return filename or "remote_file"
 
 
 def get_filename(
@@ -34,26 +157,18 @@ def get_filename(
     """
 
     if custom_filename and custom_filename.strip():
-        filename = custom_filename.strip()
-    else:
-        parsed_url = urlparse(source_url)
+        return clean_filename(custom_filename)
 
-        filename = unquote(
-            PurePosixPath(parsed_url.path).name
-        )
+    parsed_url = urlparse(source_url)
 
-    if not filename:
-        filename = "remote_file"
+    detected_filename = unquote(
+        PurePosixPath(parsed_url.path).name
+    )
 
-    filename = filename.replace("/", "_")
-    filename = filename.replace("\\", "_")
-    filename = filename.replace("\x00", "_")
-    filename = filename.replace("\r", "_")
-    filename = filename.replace("\n", "_")
-    filename = filename.replace(";", "_")
-    filename = filename.strip()
+    if not detected_filename:
+        detected_filename = "remote_file"
 
-    return filename or "remote_file"
+    return clean_filename(detected_filename)
 
 
 def parse_custom_filenames(
@@ -61,16 +176,13 @@ def parse_custom_filenames(
     escape_enabled: bool,
 ) -> list[str | None]:
     """
-    Analyse les noms personnalisés.
-
-    <echap> représente une position sans nom personnalisé.
-    Dans ce cas, le nom est détecté automatiquement depuis l'URL.
+    Analyse la liste des noms personnalisés.
 
     Exemple :
 
         "archive Linux.zip" <echap> rapport.pdf
 
-    Résultat :
+    Donne :
 
         [
             "archive Linux.zip",
@@ -96,15 +208,15 @@ def parse_custom_filenames(
     if not escape_enabled:
         return filenames
 
-    parsed_filenames: list[str | None] = []
+    return [
+        None if filename == ESCAPE_TOKEN else filename
+        for filename in filenames
+    ]
 
-    for filename in filenames:
-        if filename == ESCAPE_TOKEN:
-            parsed_filenames.append(None)
-        else:
-            parsed_filenames.append(filename)
 
-    return parsed_filenames
+# ============================================================================
+# SORTIES GITHUB ACTIONS
+# ============================================================================
 
 
 def write_github_output(
@@ -113,6 +225,8 @@ def write_github_output(
 ) -> None:
     """
     Écrit une valeur dans GITHUB_OUTPUT.
+
+    Le format EOF autorise les valeurs multilignes.
     """
 
     output_path = os.environ.get("GITHUB_OUTPUT")
@@ -137,7 +251,7 @@ def write_github_summary(
     size: object,
 ) -> None:
     """
-    Ajoute un résultat au résumé GitHub Actions.
+    Ajoute les informations d'un upload au résumé GitHub Actions.
     """
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -157,6 +271,11 @@ def write_github_summary(
         summary.write(f"- URL : {file_url}\n\n")
 
 
+# ============================================================================
+# GOFILE
+# ============================================================================
+
+
 def get_gofile_server() -> str:
     """
     Récupère automatiquement un serveur GoFile disponible.
@@ -164,7 +283,7 @@ def get_gofile_server() -> str:
 
     response = requests.get(
         GOFILE_SERVERS_ENDPOINT,
-        timeout=60,
+        timeout=CONNECT_TIMEOUT,
     )
     response.raise_for_status()
 
@@ -189,8 +308,10 @@ def get_gofile_server() -> str:
                 "server",
                 "hostname",
             ):
-                if value.get(key):
-                    return str(value[key])
+                server_name = value.get(key)
+
+                if server_name:
+                    return str(server_name)
 
     direct_server = data.get("server")
 
@@ -198,18 +319,21 @@ def get_gofile_server() -> str:
         return str(direct_server)
 
     raise RuntimeError(
-        "Aucun serveur GoFile trouvé dans la réponse :\n"
-        + json.dumps(
+        print_json_error(
+            "Aucun serveur GoFile trouvé dans la réponse :",
             payload,
-            indent=2,
-            ensure_ascii=False,
         )
     )
 
 
+# ============================================================================
+# COMMANDES CURL
+# ============================================================================
+
+
 def escape_curl_form_filename(filename: str) -> str:
     """
-    Échappe les caractères spéciaux pour curl --form.
+    Échappe les caractères spéciaux utilisés dans curl --form.
     """
 
     return (
@@ -224,7 +348,7 @@ def build_upload_command(
     filename: str,
 ) -> list[str]:
     """
-    Construit la commande curl correspondant à l'API.
+    Construit la commande curl pour GoFile ou FileDitch.
     """
 
     if api == "fileditch":
@@ -246,7 +370,7 @@ def build_upload_command(
             "--header",
             f"X-Filename: {filename}",
             "--connect-timeout",
-            CONNECT_TIMEOUT,
+            str(CONNECT_TIMEOUT),
             "--max-time",
             "0",
             "--silent",
@@ -262,19 +386,10 @@ def build_upload_command(
             "/contents/uploadfile"
         )
 
-        token = os.environ.get(
-            "GOFILE_TOKEN",
-            "",
-        ).strip()
+        token = get_environment_value("GOFILE_TOKEN")
+        folder_id = get_environment_value("GOFILE_FOLDER_ID")
 
-        folder_id = os.environ.get(
-            "GOFILE_FOLDER_ID",
-            "",
-        ).strip()
-
-        safe_filename = escape_curl_form_filename(
-            filename
-        )
+        safe_filename = escape_curl_form_filename(filename)
 
         command = [
             "curl",
@@ -285,7 +400,7 @@ def build_upload_command(
             "--form",
             f"file=@-;filename={safe_filename}",
             "--connect-timeout",
-            CONNECT_TIMEOUT,
+            str(CONNECT_TIMEOUT),
             "--max-time",
             "0",
             "--silent",
@@ -317,17 +432,14 @@ def build_upload_command(
     )
 
 
-def upload_once(
-    api: str,
+def build_source_command(
     source_url: str,
-    filename: str,
-) -> tuple[int, str, str, int]:
+) -> list[str]:
     """
-    Télécharge la source et envoie son contenu directement
-    vers GoFile ou FileDitch sans fichier temporaire.
+    Construit la commande curl qui télécharge la source.
     """
 
-    source_command = [
+    return [
         "curl",
         "-4",
         "-L",
@@ -335,28 +447,122 @@ def upload_once(
         "--silent",
         "--show-error",
         "--connect-timeout",
-        CONNECT_TIMEOUT,
+        str(CONNECT_TIMEOUT),
         "--max-time",
         "0",
         source_url,
     ]
 
-    upload_command = build_upload_command(
-        api,
-        filename,
+
+# ============================================================================
+# MULTIUP
+# ============================================================================
+
+
+def upload_multiup_remote(
+    source_url: str,
+    filename: str,
+) -> tuple[int, str, str, int]:
+    """
+    Demande à MultiUp de récupérer directement le fichier depuis l'URL.
+
+    Le fichier n'est pas téléchargé sur le runner GitHub.
+    MultiUp effectue lui-même le téléchargement distant.
+    """
+
+    username = get_environment_value("MULTIUP_USERNAME")
+    password = os.environ.get("MULTIUP_PASSWORD", "")
+
+    payload: dict[str, str] = {
+        "link": source_url,
+        "fileName": filename,
+    }
+
+    if username:
+        payload["username"] = username
+
+    if password:
+        payload["password"] = password
+
+    for index, host in enumerate(
+        MULTIUP_HOSTS,
+        start=1,
+    ):
+        payload[f"host{index}"] = host
+
+    print(
+        "Hébergeurs MultiUp sélectionnés : "
+        + ", ".join(MULTIUP_HOSTS)
     )
 
-    print("Téléchargement de la source démarré.")
-    print(f"API sélectionnée : {api}")
+    try:
+        response = requests.post(
+            MULTIUP_ENDPOINT,
+            data=payload,
+            timeout=(CONNECT_TIMEOUT, None),
+        )
+    except requests.RequestException as error:
+        return (
+            1,
+            "",
+            f"Erreur de connexion à MultiUp : {error}",
+            0,
+        )
+
+    if not response.ok:
+        return (
+            1,
+            response.text,
+            (
+                "MultiUp a retourné le code HTTP "
+                f"{response.status_code}."
+            ),
+            0,
+        )
+
+    return (
+        0,
+        response.text,
+        "",
+        0,
+    )
+
+
+# ============================================================================
+# TRANSFERT VERS GOFILE OU FILEDITCH
+# ============================================================================
+
+
+def upload_stream(
+    api: str,
+    source_url: str,
+    filename: str,
+) -> tuple[int, str, str, int]:
+    """
+    Télécharge la source et transmet son contenu à l'API.
+
+    Le fichier n'est pas stocké entièrement sur le disque.
+    Le transfert s'effectue par flux :
+
+        URL source
+            ↓
+        curl téléchargement
+            ↓
+        Python
+            ↓
+        curl upload
+            ↓
+        API finale
+    """
 
     source_process = subprocess.Popen(
-        source_command,
+        build_source_command(source_url),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
 
     upload_process = subprocess.Popen(
-        upload_command,
+        build_upload_command(api, filename),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -369,7 +575,7 @@ def upload_once(
         return (
             1,
             "",
-            "Impossible d'ouvrir la sortie source.",
+            "Impossible d'ouvrir la sortie du téléchargement.",
             0,
         )
 
@@ -397,9 +603,7 @@ def upload_once(
             file=sys.stderr,
         ) as progress:
             while True:
-                chunk = source_process.stdout.read(
-                    CHUNK_SIZE
-                )
+                chunk = source_process.stdout.read(CHUNK_SIZE)
 
                 if not chunk:
                     break
@@ -426,15 +630,15 @@ def upload_once(
         except (BrokenPipeError, OSError):
             pass
 
-    if upload_broken:
-        if source_process.poll() is None:
-            source_process.terminate()
+    if upload_broken and source_process.poll() is None:
+        source_process.terminate()
 
+    # Le flux stdin a déjà été fermé manuellement.
+    # Le mettre à None empêche communicate() de tenter de le fermer
+    # une deuxième fois.
     upload_process.stdin = None
 
-    upload_stdout, upload_stderr = (
-        upload_process.communicate()
-    )
+    upload_stdout, upload_stderr = upload_process.communicate()
 
     source_stderr = (
         source_process.stderr.read()
@@ -444,22 +648,11 @@ def upload_once(
 
     source_return_code = source_process.wait()
 
-    upload_output = upload_stdout.decode(
-        "utf-8",
-        errors="replace",
-    )
+    upload_output = decode_bytes(upload_stdout)
+    upload_error = decode_bytes(upload_stderr)
+    source_error = decode_bytes(source_stderr)
 
-    upload_error = upload_stderr.decode(
-        "utf-8",
-        errors="replace",
-    )
-
-    source_error = source_stderr.decode(
-        "utf-8",
-        errors="replace",
-    )
-
-    # 141 correspond généralement à SIGPIPE.
+    # Le code 141 correspond généralement à SIGPIPE.
     source_failed = source_return_code not in (0, 141)
 
     upload_failed = (
@@ -468,7 +661,7 @@ def upload_once(
     )
 
     if source_failed or upload_failed:
-        errors = []
+        errors: list[str] = []
 
         if source_failed:
             errors.append(
@@ -503,6 +696,55 @@ def upload_once(
     )
 
 
+def upload_once(
+    api: str,
+    source_url: str,
+    filename: str,
+) -> tuple[int, str, str, int]:
+    """
+    Lance le type d'upload correspondant à l'API sélectionnée.
+    """
+
+    if api == "multiup":
+        return upload_multiup_remote(
+            source_url,
+            filename,
+        )
+
+    print("Téléchargement de la source démarré.")
+    print(f"API sélectionnée : {api}")
+
+    return upload_stream(
+        api,
+        source_url,
+        filename,
+    )
+
+
+# ============================================================================
+# ANALYSE DES RÉPONSES API
+# ============================================================================
+
+
+def is_multiup_success(
+    error_value: object,
+) -> bool:
+    """
+    Détermine si le champ error de MultiUp indique une réussite.
+    """
+
+    return error_value in (
+        None,
+        "",
+        False,
+        0,
+        "0",
+        "ok",
+        "OK",
+        "success",
+    )
+
+
 def parse_response(
     api: str,
     response_text: str,
@@ -510,7 +752,7 @@ def parse_response(
     uploaded_size: int,
 ) -> tuple[str, str, object]:
     """
-    Analyse la réponse JSON de l'API.
+    Analyse la réponse JSON retournée par l'API.
     """
 
     try:
@@ -521,14 +763,57 @@ def parse_response(
             f"{response_text}"
         ) from error
 
+    if not isinstance(response, dict):
+        raise RuntimeError(
+            "La réponse de l'API n'est pas un objet JSON :\n"
+            f"{response_text}"
+        )
+
+    if api == "multiup":
+        error_value = response.get("error")
+
+        if not is_multiup_success(error_value):
+            raise RuntimeError(
+                print_json_error(
+                    "MultiUp a refusé l'upload :",
+                    response,
+                )
+            )
+
+        file_url = response.get("link")
+
+        if not file_url:
+            raise RuntimeError(
+                print_json_error(
+                    "MultiUp n'a pas retourné de lien :",
+                    response,
+                )
+            )
+
+        # Correction de l'erreur présente dans le code original :
+        # il faut utiliser `filename`, et non `f` suivi de `ilename`.
+        final_filename = response.get(
+            "fileName",
+            filename,
+        )
+
+        file_size = response.get(
+            "size",
+            uploaded_size,
+        )
+
+        return (
+            str(file_url),
+            str(final_filename),
+            file_size,
+        )
+
     if api == "fileditch":
         if not response.get("success"):
             raise RuntimeError(
-                "FileDitch a refusé l'upload :\n"
-                + json.dumps(
+                print_json_error(
+                    "FileDitch a refusé l'upload :",
                     response,
-                    indent=2,
-                    ensure_ascii=False,
                 )
             )
 
@@ -536,11 +821,9 @@ def parse_response(
 
         if not file_url:
             raise RuntimeError(
-                "FileDitch n'a pas retourné d'URL :\n"
-                + json.dumps(
+                print_json_error(
+                    "FileDitch n'a pas retourné d'URL :",
                     response,
-                    indent=2,
-                    ensure_ascii=False,
                 )
             )
 
@@ -565,11 +848,9 @@ def parse_response(
 
         if status not in (None, "ok"):
             raise RuntimeError(
-                "GoFile a refusé l'upload :\n"
-                + json.dumps(
+                print_json_error(
+                    "GoFile a refusé l'upload :",
                     response,
-                    indent=2,
-                    ensure_ascii=False,
                 )
             )
 
@@ -580,11 +861,9 @@ def parse_response(
 
         if not isinstance(data, dict):
             raise RuntimeError(
-                "Réponse GoFile invalide :\n"
-                + json.dumps(
+                print_json_error(
+                    "Réponse GoFile invalide :",
                     response,
-                    indent=2,
-                    ensure_ascii=False,
                 )
             )
 
@@ -597,11 +876,9 @@ def parse_response(
 
         if not file_url:
             raise RuntimeError(
-                "GoFile n'a pas retourné de lien :\n"
-                + json.dumps(
+                print_json_error(
+                    "GoFile n'a pas retourné de lien :",
                     response,
-                    indent=2,
-                    ensure_ascii=False,
                 )
             )
 
@@ -626,25 +903,38 @@ def parse_response(
     )
 
 
+# ============================================================================
+# ARGUMENTS
+# ============================================================================
+
+
 def parse_arguments() -> argparse.Namespace:
+    """
+    Définit et lit les arguments de ligne de commande.
+    """
+
     parser = argparse.ArgumentParser(
         description=(
-            "Upload de plusieurs URLs vers GoFile "
-            "ou FileDitch."
+            "Upload de plusieurs URL vers GoFile, "
+            "FileDitch ou MultiUp."
         )
     )
 
     parser.add_argument(
         "--api",
         required=True,
-        choices=("gofile", "fileditch"),
+        choices=(
+            "gofile",
+            "fileditch",
+            "multiup",
+        ),
         help="API à utiliser.",
     )
 
     parser.add_argument(
         "--source-urls",
         required=True,
-        help="URLs directes séparées par des espaces.",
+        help="URL directes séparées par des espaces.",
     )
 
     parser.add_argument(
@@ -652,8 +942,7 @@ def parse_arguments() -> argparse.Namespace:
         required=False,
         help=(
             "Noms personnalisés séparés par des espaces. "
-            "Les noms contenant des espaces doivent être "
-            "entre guillemets."
+            "Les noms contenant des espaces doivent être entre guillemets."
         ),
     )
 
@@ -661,15 +950,125 @@ def parse_arguments() -> argparse.Namespace:
         "--escape",
         action="store_true",
         help=(
-            "Interprète <echap> comme une position sans "
-            "nom personnalisé."
+            "Interprète <echap> comme une position sans nom personnalisé."
         ),
     )
 
     return parser.parse_args()
 
 
+# ============================================================================
+# TRAITEMENT D'UN FICHIER
+# ============================================================================
+
+
+def upload_file(
+    api: str,
+    source_url: str,
+    filename: str,
+    file_index: int,
+    file_count: int,
+) -> str:
+    """
+    Effectue l'upload d'un fichier avec les tentatives nécessaires.
+
+    Retourne l'URL finale du fichier.
+    """
+
+    print("\n" + "=" * 70)
+    print(f"Fichier {file_index}/{file_count}")
+    print(f"URL source : {source_url}")
+    print(f"Nom final  : {filename}")
+    print(f"API        : {api}")
+    print("=" * 70)
+
+    last_error = ""
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        print(f"\nTentative {attempt}/{MAX_ATTEMPTS}")
+
+        try:
+            (
+                return_code,
+                response_text,
+                error_text,
+                uploaded_size,
+            ) = upload_once(
+                api,
+                source_url,
+                filename,
+            )
+
+        except Exception as error:
+            return_code = 1
+            response_text = ""
+            error_text = str(error)
+            uploaded_size = 0
+
+        if return_code == 0:
+            try:
+                (
+                    file_url,
+                    final_filename,
+                    file_size,
+                ) = parse_response(
+                    api,
+                    response_text,
+                    filename,
+                    uploaded_size,
+                )
+
+            except RuntimeError as error:
+                print(
+                    f"Erreur : {error}",
+                    file=sys.stderr,
+                )
+                raise
+
+            print("\nUpload terminé avec succès.")
+            print(f"URL     : {file_url}")
+            print(f"Fichier : {final_filename}")
+            print(f"Taille  : {file_size} octets")
+
+            write_github_summary(
+                api,
+                file_url,
+                final_filename,
+                file_size,
+            )
+
+            return file_url
+
+        last_error = error_text or "Erreur inconnue."
+
+        print(last_error)
+
+        if attempt < MAX_ATTEMPTS:
+            wait_seconds = attempt * RETRY_DELAY_SECONDS
+
+            print(
+                "Nouvelle tentative dans "
+                f"{wait_seconds} secondes..."
+            )
+
+            time.sleep(wait_seconds)
+
+    raise RuntimeError(
+        f"Échec définitif pour : {source_url}\n"
+        f"{last_error}"
+    )
+
+
+# ============================================================================
+# PROGRAMME PRINCIPAL
+# ============================================================================
+
+
 def main() -> int:
+    """
+    Point d'entrée principal du script.
+    """
+
     args = parse_arguments()
 
     source_urls = args.source_urls.split()
@@ -710,9 +1109,7 @@ def main() -> int:
         return 1
 
     for source_url in source_urls:
-        if not source_url.startswith(
-            ("http://", "https://")
-        ):
+        if not is_valid_source_url(source_url):
             print(
                 f"URL invalide : {source_url}",
                 file=sys.stderr,
@@ -731,8 +1128,7 @@ def main() -> int:
 
     if custom_count:
         print(
-            f"{custom_count} nom(s) personnalisé(s) "
-            "détecté(s)."
+            f"{custom_count} nom(s) personnalisé(s) détecté(s)."
         )
 
     if skipped_count:
@@ -747,8 +1143,8 @@ def main() -> int:
 
     if remaining_count > 0:
         print(
-            f"{remaining_count} fichier(s) restant(s) "
-            "utiliseront le nom détecté depuis leur URL."
+            f"{remaining_count} fichier(s) restant(s) utiliseront "
+            "le nom détecté depuis leur URL."
         )
 
     all_file_urls: list[str] = []
@@ -761,120 +1157,30 @@ def main() -> int:
         custom_index = index - 1
 
         if custom_index < len(custom_filenames):
-            custom_filename = custom_filenames[
-                custom_index
-            ]
+            custom_filename = custom_filenames[custom_index]
 
         filename = get_filename(
             source_url,
             custom_filename,
         )
 
-        print("\n" + "=" * 70)
-        print(
-            f"Fichier {index}/{len(source_urls)}"
-        )
-        print(f"URL source : {source_url}")
-        print(f"Nom final  : {filename}")
-        print(f"API        : {args.api}")
-        print("=" * 70)
-
-        last_error = ""
-        upload_successful = False
-
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            print(
-                f"\nTentative {attempt}/{MAX_ATTEMPTS}"
+        try:
+            file_url = upload_file(
+                api=args.api,
+                source_url=source_url,
+                filename=filename,
+                file_index=index,
+                file_count=len(source_urls),
             )
 
-            try:
-                (
-                    return_code,
-                    response_text,
-                    error_text,
-                    uploaded_size,
-                ) = upload_once(
-                    args.api,
-                    source_url,
-                    filename,
-                )
-
-            except Exception as error:
-                return_code = 1
-                response_text = ""
-                error_text = str(error)
-                uploaded_size = 0
-
-            if return_code == 0:
-                try:
-                    (
-                        file_url,
-                        final_filename,
-                        file_size,
-                    ) = parse_response(
-                        args.api,
-                        response_text,
-                        filename,
-                        uploaded_size,
-                    )
-
-                except RuntimeError as error:
-                    print(
-                        f"Erreur : {error}",
-                        file=sys.stderr,
-                    )
-                    return 1
-
-                print(
-                    "\nUpload terminé avec succès."
-                )
-                print(f"URL     : {file_url}")
-                print(
-                    f"Fichier : {final_filename}"
-                )
-                print(
-                    f"Taille  : {file_size} octets"
-                )
-
-                all_file_urls.append(file_url)
-
-                write_github_summary(
-                    args.api,
-                    file_url,
-                    final_filename,
-                    file_size,
-                )
-
-                upload_successful = True
-                break
-
-            last_error = (
-                error_text
-                or "Erreur inconnue."
-            )
-
-            print(last_error)
-
-            if attempt < MAX_ATTEMPTS:
-                wait_seconds = attempt * 10
-
-                print(
-                    "Nouvelle tentative dans "
-                    f"{wait_seconds} secondes..."
-                )
-
-                time.sleep(wait_seconds)
-
-        if not upload_successful:
+        except Exception as error:
             print(
-                f"\nÉchec définitif : {source_url}",
-                file=sys.stderr,
-            )
-            print(
-                last_error,
+                f"\n{error}",
                 file=sys.stderr,
             )
             return 1
+
+        all_file_urls.append(file_url)
 
     if not all_file_urls:
         print(
@@ -885,12 +1191,14 @@ def main() -> int:
 
     all_urls_text = "\n".join(all_file_urls)
 
+    # Toutes les URL, une par ligne.
     write_github_output(
         "file_urls",
         all_urls_text,
     )
 
-    # Compatibilité avec l'ancien workflow.
+    # Compatibilité avec l'ancien fonctionnement.
+    # Cette sortie contient uniquement la dernière URL.
     write_github_output(
         "file_url",
         all_file_urls[-1],
