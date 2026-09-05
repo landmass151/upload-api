@@ -23,7 +23,8 @@ on:
         description: >-
           Noms personnalisés optionnels, dans le même ordre que les URL.
           Entourer les noms contenant des espaces avec des guillemets.
-          Exemple : "mon fichier.zip" image.iso.
+          Utiliser <echap> pour détecter automatiquement le nom depuis l'URL.
+          Exemple : "mon fichier.zip" <echap> image.iso.
           Si moins de noms sont fournis, les noms restants sont détectés
           depuis les URL. Si plus de noms sont fournis, le workflow s'arrête.
         required: false
@@ -31,8 +32,8 @@ on:
 
       escape:
         description: >-
-          Active le remplacement de <echap> par un guillemet double.
-          Exemple : "rapport<echap>final.pdf"
+          Active l'utilisation de <echap> pour ignorer un nom personnalisé
+          et détecter automatiquement le nom depuis l'URL.
         required: false
         type: boolean
         default: false
@@ -103,6 +104,7 @@ jobs:
         shell: bash
         env:
           FILE_URLS: ${{ steps.upload.outputs.file_urls }}
+
         run: |
           echo "Liens générés :"
           printf '%s\n' "$FILE_URLS"
