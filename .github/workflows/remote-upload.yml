@@ -43,8 +43,8 @@ on:
         description: >-
           Hébergeurs MultiUp à utiliser, séparés par des virgules ou des espaces.
           Utiliser "all" pour sélectionner tous les hébergeurs.
-          Valeurs disponibles : 1fichier.com, FireLoad.com, HexLoad.com,
-          RapidGator.net, VikingFile.com.
+          Valeurs disponibles : 1fichier.com, fireload.com, hexload.com,
+          rapidgator.net, vikingfile.com.
         required: false
         type: string
         default: all
