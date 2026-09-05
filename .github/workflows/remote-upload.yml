@@ -63,7 +63,7 @@ jobs:
 
     steps:
       - name: Récupérer le dépôt
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Installer Python
         uses: actions/setup-python@v5
