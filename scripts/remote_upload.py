@@ -37,10 +37,10 @@ MULTIUP_ENDPOINT = "https://multiup.io/api/remote-upload"
 # Pour modifier les hébergeurs, changez uniquement cette liste.
 MULTIUP_HOSTS = (
     "1fichier.com",
-    "FireLoad.com",
-    "HexLoad.com",
-    "RapidGator.net",
-    "VikingFile.com",
+    "fireload.com",
+    "hexload.com",
+    "rapidgator.net",
+    "vikingfile.com",
 )
 
 
@@ -59,7 +59,7 @@ RETRY_DELAY_SECONDS = 10
 
 
 # Taille des blocs transférés.
-CHUNK_SIZE = 1024 * 1024
+CHUNK_SIZE = 10 * 1024 * 1024
 
 
 # Délai maximal de connexion à une API ou à une URL source.
