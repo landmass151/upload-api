@@ -35,8 +35,8 @@ MULTIUP_ENDPOINT = "https://multiup.io/api/remote-upload"
 #
 #   MULTIUP_HOSTS=all
 #   MULTIUP_HOSTS="1fichier.com"
-#   MULTIUP_HOSTS="1fichier.com, FireLoad.com"
-#   MULTIUP_HOSTS="1fichier.com FireLoad.com"
+#   MULTIUP_HOSTS="1fichier.com, fireload.com"
+#   MULTIUP_HOSTS="1fichier.com fireload.com"
 AVAILABLE_MULTIUP_HOSTS = (
     "1fichier.com",
     "fireload.com",
@@ -209,11 +209,11 @@ def get_selected_multiup_hosts() -> tuple[str, ...]:
 
     ou une liste séparée par des virgules :
 
-        1fichier.com, FireLoad.com
+        1fichier.com, fireload.com
 
     ou une liste séparée par des espaces :
 
-        1fichier.com FireLoad.com
+        1fichier.com fireload.com
 
     Les noms sont comparés sans tenir compte de la casse.
     """
