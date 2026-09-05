@@ -134,6 +134,6 @@ jobs:
             echo "- API utilisée : \`${{ inputs.api }}\`"
             echo
             echo '```text'
-            printf '%s\n' "\$FILE\_URLS"
+            printf '%s\n' "$FILE_URLS"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
