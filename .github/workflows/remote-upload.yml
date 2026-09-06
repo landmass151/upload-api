@@ -31,18 +31,17 @@ on:
 
       filename:
         description: >-
-          Noms personnalisés optionnels dans le même ordre que les URLs.
-          Utiliser des guillemets pour les noms contenant des espaces.
+          Nom personnalisé du ZIP final en mode archive.
+          Exemple : mon-archive.zip
         required: false
         type: string
 
       escape:
         description: >-
-          Utilise <echap> pour conserver le nom détecté depuis l'URL.
+          Utilise <echap> pour conserver le nom détecté automatiquement.
         required: false
         type: boolean
         default: false
-
 
 permissions:
   contents: read
@@ -62,6 +61,7 @@ jobs:
           set -euo pipefail
 
           sudo apt-get update
+
           sudo apt-get install -y \
             p7zip-full \
             unrar-free \
@@ -89,6 +89,8 @@ jobs:
 
       - name: Vérifier les outils
         run: |
+          set -euo pipefail
+
           python --version
           curl --version
 
@@ -117,10 +119,28 @@ jobs:
         run: |
           set -euo pipefail
 
+          case "$API" in
+            gofile)
+              SCRIPT="scripts/upload-gofile.py"
+              ;;
+
+            fileditch)
+              SCRIPT="scripts/upload-fileditch.py"
+              ;;
+
+            multiup)
+              SCRIPT="scripts/upload-multiup.py"
+              ;;
+
+            *)
+              echo "API inconnue : $API" >&2
+              exit 1
+              ;;
+          esac
+
           command=(
-            python scripts/upload-api.py
+            python "$SCRIPT"
             --mode "$MODE"
-            --api "$API"
             --source-urls "$SOURCE_URLS"
           )
 
@@ -135,6 +155,8 @@ jobs:
             command+=(--escape)
           fi
 
+          echo "Script utilisé : $SCRIPT"
+
           "${command[@]}"
 
       - name: Afficher les liens générés
@@ -142,6 +164,7 @@ jobs:
         shell: bash
         env:
           FILE_URLS: ${{ steps.upload.outputs.file_urls }}
+
         run: |
           set -euo pipefail
 
