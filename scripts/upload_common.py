@@ -32,7 +32,7 @@ MULTIUP_FASTEST_SERVER_ENDPOINT = (
 
 MULTIUP_LOGIN_ENDPOINT = "https://multiup.io/api/login"
 
-USER_AGENT = "Mozilla/5.0"
+USER_AGENT = "Mozilla"
 
 DEFAULT_TIMEOUT = 60
 MAX_ATTEMPTS = 3
