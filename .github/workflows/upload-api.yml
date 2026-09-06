@@ -1,5 +1,5 @@
 name: Upload API
-# Ce trouve dans : .github/workflows/upload-api.yml
+# Ça se situe dans : .github/workflows/upload-api.yml
 
 on:
   workflow_dispatch:
@@ -37,7 +37,6 @@ on:
           En mode archive : nom personnalisé du ZIP final.
           En mode re-upload : noms personnalisés séparés par des espaces,
           dans le même ordre que les URLs.
-          Exemple : mon-archive.zip
         required: false
         type: string
 
