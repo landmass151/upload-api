@@ -1,37 +1,53 @@
-name: Remote upload
+name: Upload API
 
 on:
   workflow_dispatch:
     inputs:
-      api:
-        description: "API à utiliser :"
+      mode:
+        description: "Mode d'exécution"
         required: true
         type: choice
+        default: archive
+        options:
+          - archive
+          - desarchive
+
+      api:
+        description: "API à utiliser"
+        required: true
+        type: choice
+        default: gofile
         options:
           - gofile
           - fileditch
           - multiup
-        default: gofile
 
       source_urls:
         description: >-
-          URLs directes séparées par des espaces :
+          En mode archive : plusieurs URLs séparées par des espaces.
+          En mode desarchive : une seule URL d'archive.
         required: true
         type: string
 
       filename:
         description: >-
-          Noms personnalisés optionnels, dans le même ordre que les URL.
-          Entourer les noms contenant des espaces avec des guillemets :
+          Noms personnalisés optionnels dans le même ordre que les URLs.
+          Utiliser des guillemets pour les noms contenant des espaces.
         required: false
         type: string
 
       escape:
         description: >-
-          Active l'utilisation de <echap> pour ignorer un nom personnalisé.
+          Utilise <echap> pour conserver le nom détecté depuis l'URL.
         required: false
         type: boolean
         default: false
+
+      timeout:
+        description: "Timeout de connexion en secondes"
+        required: true
+        default: "60"
+        type: string
 
 permissions:
   contents: read
@@ -41,13 +57,21 @@ jobs:
     name: Upload vers ${{ inputs.api }}
     runs-on: ubuntu-latest
 
-    outputs:
-      file_url: ${{ steps.upload.outputs.file_url }}
-      file_urls: ${{ steps.upload.outputs.file_urls }}
-
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@v5
+
+      - name: Installer les outils système
+        if: ${{ inputs.mode == 'desarchive' }}
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            p7zip-full \
+            unrar-free \
+            unzip \
+            tar
 
       - name: Installer Python
         uses: actions/setup-python@v6
@@ -56,22 +80,39 @@ jobs:
 
       - name: Installer les dépendances Python
         run: |
-          python -m pip install --disable-pip-version-check --upgrade pip
-          python -m pip install --disable-pip-version-check requests tqdm
+          set -euo pipefail
 
-      - name: Vérifier Python et curl
+          python -m pip install \
+            --disable-pip-version-check \
+            --upgrade \
+            pip
+
+          python -m pip install \
+            --disable-pip-version-check \
+            requests \
+            tqdm
+
+      - name: Vérifier les outils
         run: |
           python --version
           curl --version
 
-      - name: Envoyer les fichiers
+          if [ "${{ inputs.mode }}" = "desarchive" ]; then
+            7z
+            unzip -v
+            tar --version
+          fi
+
+      - name: Télécharger et envoyer les fichiers
         id: upload
         shell: bash
         env:
+          MODE: ${{ inputs.mode }}
           API: ${{ inputs.api }}
           SOURCE_URLS: ${{ inputs.source_urls }}
           CUSTOM_FILENAMES: ${{ inputs.filename }}
           ENABLE_ESCAPE: ${{ inputs.escape }}
+          TIMEOUT: ${{ inputs.timeout }}
 
           GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
           GOFILE_FOLDER_ID: ${{ secrets.GOFILE_FOLDER_ID }}
@@ -83,9 +124,11 @@ jobs:
           set -euo pipefail
 
           command=(
-            python scripts/remote_upload.py
+            python scripts/upload-api.py
+            --mode "$MODE"
             --api "$API"
             --source-urls "$SOURCE_URLS"
+            --timeout "$TIMEOUT"
           )
 
           if [ -n "$CUSTOM_FILENAMES" ]; then
@@ -101,20 +144,22 @@ jobs:
 
           "${command[@]}"
 
-      - name: Afficher les liens finaux
+      - name: Afficher les liens générés
         if: success()
         shell: bash
         env:
           FILE_URLS: ${{ steps.upload.outputs.file_urls }}
-
         run: |
+          set -euo pipefail
+
           echo "Liens générés :"
           printf '%s\n' "$FILE_URLS"
 
           {
             echo "## Uploads terminés"
             echo
-            echo "- API utilisée : \`${{ inputs.api }}\`"
+            echo "- Mode : \`${{ inputs.mode }}\`"
+            echo "- API : \`${{ inputs.api }}\`"
             echo
             echo '```text'
             printf '%s\n' "$FILE_URLS"
