@@ -57,7 +57,7 @@ MULTIUP_FASTEST_SERVER_ENDPOINT = (
 )
 MULTIUP_LOGIN_ENDPOINT = "https://multiup.io/api/login"
 
-USER_AGENT = "Mozilla/5.0 (Android 15; Mobile; rv:136.0) Gecko/136.0 Firefox/136.0"
+USER_AGENT = "Mozilla"
 
 DEFAULT_TIMEOUT = 60
 MAX_ATTEMPTS = 3
@@ -322,7 +322,7 @@ def download_url(
         stream=True,
         allow_redirects=True,
         timeout=(timeout, 3600),
-        headers={"User-Agent": USER_AGENT},
+        headers={"User-Agent": Mozilla},
     ) as response:
         response.raise_for_status()
 
@@ -711,7 +711,7 @@ def get_gofile_server(timeout: int) -> str:
     response = requests.get(
         GOFILE_SERVERS_ENDPOINT,
         timeout=timeout,
-        headers={"User-Agent": USER_AGENT},
+        headers={"User-Agent": Mozilla},
     )
     response.raise_for_status()
 
@@ -814,7 +814,7 @@ def upload_fileditch(
             headers={
                 "Content-Type": "application/octet-stream",
                 "X-Filename": filename,
-                "User-Agent": USER_AGENT,
+                "User-Agent": Mozilla,
             },
             timeout=(timeout, 3600),
         )
@@ -850,7 +850,7 @@ def get_multiup_upload_endpoint(timeout: int) -> str:
     response = requests.get(
         MULTIUP_FASTEST_SERVER_ENDPOINT,
         timeout=timeout,
-        headers={"User-Agent": USER_AGENT},
+        headers={"User-Agent": Mozilla},
     )
     response.raise_for_status()
 
