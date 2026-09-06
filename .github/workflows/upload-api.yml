@@ -1,6 +1,6 @@
 name: Upload API
-# Le fichier est situé à l’emplacement suivant : .github/workflows/upload-api.yml
-
+# Le fichier est situé à l’emplacement suivant :
+# .github/workflows/upload-api.yml
 on:
   workflow_dispatch:
     inputs:
