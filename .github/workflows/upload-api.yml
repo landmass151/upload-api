@@ -26,23 +26,23 @@ on:
 
       source_urls:
         description: >-
-          [En mode archive : une ou plusieurs URLs séparées par des espaces. |
-          En mode desarchive : une seule URL d'archive. |
-          En mode re-upload : une ou plusieurs URLs séparées par des espaces.]
+          En mode archive : une ou plusieurs URLs séparées par des espaces.
+          En mode desarchive : une seule URL d'archive.
+          En mode re-upload : une ou plusieurs URLs séparées par des espaces.
         required: true
         type: string
 
       filename:
         description: >-
-          [En mode archive : nom personnalisé du ZIP final.]
-          [En mode re-upload : noms personnalisés séparés par des espaces,
-          dans le même ordre que les URLs.]
+          En mode archive : nom personnalisé du ZIP final.
+          En mode re-upload : noms personnalisés séparés par des espaces,
+          dans le même ordre que les URLs.
         required: false
         type: string
 
       escape:
         description: >-
-          [Utilise <echap> pour conserver le nom détecté automatiquement.]
+          Utilise <echap> pour conserver le nom détecté automatiquement.
         required: false
         type: boolean
         default: false
