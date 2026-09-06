@@ -27,8 +27,8 @@ on:
       source_urls:
         description: >-
           [En mode archive : une ou plusieurs URLs séparées par des espaces. |
-          | En mode desarchive : une seule URL d'archive. |
-          | En mode re-upload : une ou plusieurs URLs séparées par des espaces.]
+          En mode desarchive : une seule URL d'archive. |
+          En mode re-upload : une ou plusieurs URLs séparées par des espaces.]
         required: true
         type: string
 
