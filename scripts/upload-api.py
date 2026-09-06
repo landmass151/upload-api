@@ -909,7 +909,7 @@ def get_multiup_user(timeout: int) -> str | None:
             "password": password,
         },
         timeout=timeout,
-        headers={"User-Agent": USER_AGENT},
+        headers={"User-Agent": Mozilla},
     )
     response.raise_for_status()
 
@@ -956,7 +956,7 @@ def upload_multiup(
             },
             data=data,
             timeout=(timeout, 3600),
-            headers={"User-Agent": USER_AGENT},
+            headers={"User-Agent": Mozilla},
         )
 
     response.raise_for_status()
