@@ -322,7 +322,7 @@ def download_url(
         stream=True,
         allow_redirects=True,
         timeout=(timeout, 3600),
-        headers={"User-Agent": Mozilla},
+        headers={"User-Agent": USER_AGENT},
     ) as response:
         response.raise_for_status()
 
@@ -711,7 +711,7 @@ def get_gofile_server(timeout: int) -> str:
     response = requests.get(
         GOFILE_SERVERS_ENDPOINT,
         timeout=timeout,
-        headers={"User-Agent": Mozilla},
+        headers={"User-Agent": USER_AGENT},
     )
     response.raise_for_status()
 
@@ -814,7 +814,7 @@ def upload_fileditch(
             headers={
                 "Content-Type": "application/octet-stream",
                 "X-Filename": filename,
-                "User-Agent": Mozilla,
+                "User-Agent": USER_AGENT,
             },
             timeout=(timeout, 3600),
         )
@@ -850,7 +850,7 @@ def get_multiup_upload_endpoint(timeout: int) -> str:
     response = requests.get(
         MULTIUP_FASTEST_SERVER_ENDPOINT,
         timeout=timeout,
-        headers={"User-Agent": Mozilla},
+        headers={"User-Agent": USER_AGENT},
     )
     response.raise_for_status()
 
@@ -909,7 +909,7 @@ def get_multiup_user(timeout: int) -> str | None:
             "password": password,
         },
         timeout=timeout,
-        headers={"User-Agent": Mozilla},
+        headers={"User-Agent": USER_AGENT},
     )
     response.raise_for_status()
 
@@ -956,7 +956,7 @@ def upload_multiup(
             },
             data=data,
             timeout=(timeout, 3600),
-            headers={"User-Agent": Mozilla},
+            headers={"User-Agent": USER_AGENT},
         )
 
     response.raise_for_status()
