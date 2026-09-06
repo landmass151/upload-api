@@ -1,25 +1,17 @@
 #!/usr/bin/env python3
 """
-Télécharge, extrait et envoie des fichiers vers GoFile, FileDitch ou MultiUp.
+Télécharge, emballe et envoie des fichiers vers GoFile, FileDitch
+ou MultiUp.
 
 Modes disponibles :
-- archive    : télécharge chaque URL puis envoie le fichier complet ;
-- desarchive : télécharge une archive, l'extrait récursivement et envoie
-               chaque fichier autorisé séparément.
 
-Variables d'environnement facultatives :
+- archive :
+    télécharge chaque URL, place le fichier original dans un ZIP,
+    puis envoie le ZIP.
 
-GoFile :
-- GOFILE_TOKEN
-- GOFILE_FOLDER_ID
-
-MultiUp :
-- MULTIUP_USERNAME
-- MULTIUP_PASSWORD
-
-GitHub Actions :
-- GITHUB_OUTPUT
-- GITHUB_STEP_SUMMARY
+- desarchive :
+    télécharge une archive, l'extrait récursivement et envoie
+    chaque fichier autorisé séparément.
 """
 
 from __future__ import annotations
@@ -101,15 +93,15 @@ BLOCKED_EXTENSIONS = {
 }
 
 ARCHIVE_SUFFIXES = (
+    ".tar.gz",
+    ".tar.bz2",
+    ".tar.xz",
     ".zip",
     ".7z",
     ".rar",
     ".tar",
-    ".tar.gz",
     ".tgz",
-    ".tar.bz2",
     ".tbz2",
-    ".tar.xz",
     ".txz",
 )
 
@@ -170,6 +162,13 @@ def clean_filename(filename: str) -> str:
     return filename[:240] or "downloaded_file"
 
 
+def content_type_for(filename: str) -> str:
+    """Retourne le type MIME correspondant au nom du fichier."""
+    content_type, _ = mimetypes.guess_type(filename)
+
+    return content_type or "application/octet-stream"
+
+
 def filename_from_url(url: str) -> str:
     """Déduit un nom de fichier depuis une URL."""
     filename = Path(unquote(urlparse(url).path)).name
@@ -221,6 +220,17 @@ def filename_from_response(
     return filename + (extension or ".bin")
 
 
+def archive_suffix(filename: str) -> str:
+    """Retourne l'extension complète d'une archive connue."""
+    filename = filename.lower()
+
+    for suffix in sorted(ARCHIVE_SUFFIXES, key=len, reverse=True):
+        if filename.endswith(suffix):
+            return suffix
+
+    return ""
+
+
 def parse_urls(value: str) -> list[str]:
     """Extrait les URLs HTTP et HTTPS uniques."""
     found_urls = re.findall(
@@ -264,25 +274,35 @@ def parse_custom_filenames(
     ]
 
 
-def get_filename(
-    source_url: str,
-    custom_filename: str | None,
+def zip_archive_filename(
+    source_filename: str,
+    custom_filename: str | None = None,
 ) -> str:
-    """
-    Retourne le nom personnalisé ou celui détecté depuis l'URL.
-
-    Lorsqu'un nom personnalisé est utilisé en mode archive, l'extension
-    .zip est ajoutée automatiquement si elle est absente.
-    """
+    """Retourne le nom du ZIP qui contiendra le fichier source."""
     if custom_filename and custom_filename.strip():
         filename = clean_filename(custom_filename)
 
-        if not filename.lower().endswith(".zip"):
-            filename += ".zip"
+        if filename.lower().endswith(".zip"):
+            return filename
 
-        return filename
+        source_suffix = archive_suffix(filename)
 
-    return filename_from_url(source_url)
+        if source_suffix:
+            filename = filename[:-len(source_suffix)]
+        else:
+            filename = Path(filename).stem
+
+        return f"{filename}.zip"
+
+    source_filename = clean_filename(source_filename)
+    source_suffix = archive_suffix(source_filename)
+
+    if source_suffix:
+        basename = source_filename[:-len(source_suffix)]
+    else:
+        basename = Path(source_filename).stem
+
+    return f"{basename}.zip"
 
 
 def unique_filename(
@@ -309,8 +329,33 @@ def unique_filename(
         counter += 1
 
 
+def unique_download_path(
+    directory: Path,
+    filename: str,
+) -> Path:
+    """Retourne un chemin disponible sans écraser un fichier existant."""
+    filename = clean_filename(filename)
+    candidate = directory / filename
+
+    if not candidate.exists():
+        return candidate
+
+    path = Path(filename)
+    counter = 2
+
+    while True:
+        candidate = directory / (
+            f"{path.stem}_{counter}{path.suffix}"
+        )
+
+        if not candidate.exists():
+            return candidate
+
+        counter += 1
+
+
 # ============================================================================
-# Téléchargement
+# Téléchargement et création des ZIP
 # ============================================================================
 
 
@@ -340,7 +385,11 @@ def download_url(
             response,
             response.url,
         )
-        destination = destination_dir / filename
+
+        destination = unique_download_path(
+            directory=destination_dir,
+            filename=filename,
+        )
 
         content_length = response.headers.get("Content-Length")
 
@@ -357,7 +406,7 @@ def download_url(
         with destination.open("wb") as output:
             with tqdm(
                 total=total,
-                desc=filename,
+                desc=destination.name,
                 unit="B",
                 unit_scale=True,
                 unit_divisor=1024,
@@ -387,8 +436,28 @@ def download_url(
     return destination
 
 
+def create_zip_archive(
+    source_file: Path,
+    zip_file: Path,
+    inner_filename: str,
+) -> Path:
+    """Crée un fichier ZIP contenant le fichier source."""
+    with zipfile.ZipFile(
+        zip_file,
+        mode="w",
+        compression=zipfile.ZIP_STORED,
+        allowZip64=True,
+    ) as archive:
+        archive.write(
+            source_file,
+            arcname=clean_filename(inner_filename),
+        )
+
+    return zip_file
+
+
 # ============================================================================
-# Extraction sécurisée
+# Extraction des archives
 # ============================================================================
 
 
@@ -424,7 +493,7 @@ def extract_zip(
     archive: Path,
     output: Path,
 ) -> None:
-    """Extrait une archive ZIP en contrôlant chaque chemin."""
+    """Extrait une archive ZIP."""
     with zipfile.ZipFile(archive) as zip_file:
         for info in zip_file.infolist():
             destination = safe_path(output, info.filename)
@@ -540,6 +609,7 @@ def extract_archive(
 ) -> None:
     """Sélectionne le moteur d'extraction adapté."""
     archive_name = archive.name.lower()
+    output.mkdir(parents=True, exist_ok=True)
 
     if archive_name.endswith(".zip"):
         extract_zip(archive, output)
@@ -776,7 +846,7 @@ def upload_gofile(
                 "file": (
                     filename,
                     file,
-                    "application/octet-stream",
+                    content_type_for(filename),
                 )
             },
             data=data,
@@ -822,7 +892,7 @@ def upload_fileditch(
             params={"filename": filename},
             data=file,
             headers={
-                "Content-Type": "application/octet-stream",
+                "Content-Type": content_type_for(filename),
                 "X-Filename": filename,
                 "User-Agent": USER_AGENT,
             },
@@ -961,7 +1031,7 @@ def upload_multiup(
                 "files[]": (
                     filename,
                     file,
-                    "application/octet-stream",
+                    content_type_for(filename),
                 )
             },
             data=data,
@@ -1008,7 +1078,11 @@ def upload_local_file(
     except KeyError as error:
         raise ValueError(f"API inconnue : {api}") from error
 
-    return uploader(file_path, filename, timeout)
+    return uploader(
+        file_path,
+        filename,
+        timeout,
+    )
 
 
 # ============================================================================
@@ -1077,8 +1151,15 @@ def run_archive_mode(
     timeout: int,
     temporary_dir: Path,
 ) -> list[dict[str, Any]]:
-    """Télécharge et envoie chaque URL comme fichier complet."""
+    """
+    Télécharge chaque fichier, crée un ZIP puis l'envoie.
+    """
     uploads: list[dict[str, Any]] = []
+    used_names: set[str] = set()
+
+    # Les ZIP générés sont séparés des fichiers téléchargés.
+    zip_dir = temporary_dir / "generated_zips"
+    zip_dir.mkdir(parents=True, exist_ok=True)
 
     for index, url in enumerate(urls):
         custom_name = (
@@ -1087,19 +1168,37 @@ def run_archive_mode(
             else None
         )
 
-        filename = get_filename(url, custom_name)
-
         local_file = download_url(
             url=url,
             destination_dir=temporary_dir,
             timeout=timeout,
         )
 
+        inner_filename = clean_filename(local_file.name)
+
+        filename = zip_archive_filename(
+            source_filename=inner_filename,
+            custom_filename=custom_name,
+        )
+
+        filename = unique_filename(
+            filename=filename,
+            used=used_names,
+        )
+
+        zip_path = zip_dir / filename
+
+        create_zip_archive(
+            source_file=local_file,
+            zip_file=zip_path,
+            inner_filename=inner_filename,
+        )
+
         uploads.append(
             upload_with_retry(
                 api=api,
                 source_url=url,
-                file_path=local_file,
+                file_path=zip_path,
                 filename=filename,
                 timeout=timeout,
             )
@@ -1157,7 +1256,7 @@ def parse_arguments() -> argparse.Namespace:
     """Analyse les arguments de ligne de commande."""
     parser = argparse.ArgumentParser(
         description=(
-            "Télécharge, désarchive et envoie des fichiers "
+            "Télécharge, emballe, désarchive et envoie des fichiers "
             "vers GoFile, FileDitch ou MultiUp."
         )
     )
@@ -1166,7 +1265,10 @@ def parse_arguments() -> argparse.Namespace:
         "--mode",
         required=True,
         choices=("archive", "desarchive"),
-        help="Mode d'exécution.",
+        help=(
+            "archive = crée un ZIP contenant chaque fichier téléchargé ; "
+            "desarchive = extrait une archive et envoie son contenu."
+        ),
     )
 
     parser.add_argument(
