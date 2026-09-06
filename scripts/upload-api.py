@@ -268,9 +268,19 @@ def get_filename(
     source_url: str,
     custom_filename: str | None,
 ) -> str:
-    """Retourne le nom personnalisé ou celui détecté depuis l'URL."""
+    """
+    Retourne le nom personnalisé ou celui détecté depuis l'URL.
+
+    Lorsqu'un nom personnalisé est utilisé en mode archive, l'extension
+    .zip est ajoutée automatiquement si elle est absente.
+    """
     if custom_filename and custom_filename.strip():
-        return clean_filename(custom_filename)
+        filename = clean_filename(custom_filename)
+
+        if not filename.lower().endswith(".zip"):
+            filename += ".zip"
+
+        return filename
 
     return filename_from_url(source_url)
 
@@ -881,7 +891,7 @@ def get_multiup_upload_endpoint(timeout: int) -> str:
 
     if not parsed_endpoint.netloc:
         raise RuntimeError(
-            f'Endpoint MultiUp invalide : {endpoint}'
+            f"Endpoint MultiUp invalide : {endpoint}"
         )
 
     return endpoint
@@ -1078,6 +1088,7 @@ def run_archive_mode(
         )
 
         filename = get_filename(url, custom_name)
+
         local_file = download_url(
             url=url,
             destination_dir=temporary_dir,
