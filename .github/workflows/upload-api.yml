@@ -1,4 +1,4 @@
-name: Upload API
+name: upload-api yml
 
 on:
   workflow_dispatch:
@@ -11,6 +11,7 @@ on:
         options:
           - archive
           - desarchive
+          - re-upload
 
       api:
         description: "API à utiliser"
@@ -26,12 +27,15 @@ on:
         description: >-
           En mode archive : plusieurs URLs séparées par des espaces.
           En mode desarchive : une seule URL d'archive.
+          En mode re-upload : une ou plusieurs URLs séparées par des espaces.
         required: true
         type: string
 
       filename:
         description: >-
-          Nom personnalisé du ZIP final en mode archive.
+          En mode archive : nom personnalisé du ZIP final.
+          En mode re-upload : noms personnalisés séparés par des espaces,
+          dans le même ordre que les URLs.
           Exemple : mon-archive.zip
         required: false
         type: string
