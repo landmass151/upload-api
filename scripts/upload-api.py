@@ -6,7 +6,7 @@ ou MultiUp.
 Modes disponibles :
 
 - archive :
-    télécharge chaque URL, place le fichier original dans un ZIP,
+    télécharge toutes les URLs, place tous les fichiers dans un seul ZIP,
     puis envoie le ZIP.
 
 - desarchive :
@@ -110,7 +110,6 @@ ARCHIVE_SUFFIXES = (
 # GitHub Actions
 # ============================================================================
 
-
 def github_output(name: str, value: str) -> None:
     """Écrit une valeur dans le fichier GITHUB_OUTPUT."""
     output_file = os.environ.get("GITHUB_OUTPUT")
@@ -150,7 +149,6 @@ def github_summary(
 # ============================================================================
 # Noms de fichiers et URLs
 # ============================================================================
-
 
 def clean_filename(filename: str) -> str:
     """Nettoie un nom de fichier fourni par une URL ou HTTP."""
@@ -232,7 +230,11 @@ def archive_suffix(filename: str) -> str:
 
 
 def parse_urls(value: str) -> list[str]:
-    """Extrait les URLs HTTP et HTTPS uniques."""
+    """
+    Extrait les URLs HTTP et HTTPS.
+
+    Les doublons sont volontairement conservés.
+    """
     found_urls = re.findall(
         r"https?://[^\s]+",
         value,
@@ -244,7 +246,7 @@ def parse_urls(value: str) -> list[str]:
     for url in found_urls:
         url = url.strip().rstrip(",;")
 
-        if url and url not in urls:
+        if url:
             urls.append(url)
 
     return urls
@@ -272,37 +274,6 @@ def parse_custom_filenames(
         None if name == ESCAPE_TOKEN else name
         for name in names
     ]
-
-
-def zip_archive_filename(
-    source_filename: str,
-    custom_filename: str | None = None,
-) -> str:
-    """Retourne le nom du ZIP qui contiendra le fichier source."""
-    if custom_filename and custom_filename.strip():
-        filename = clean_filename(custom_filename)
-
-        if filename.lower().endswith(".zip"):
-            return filename
-
-        source_suffix = archive_suffix(filename)
-
-        if source_suffix:
-            filename = filename[:-len(source_suffix)]
-        else:
-            filename = Path(filename).stem
-
-        return f"{filename}.zip"
-
-    source_filename = clean_filename(source_filename)
-    source_suffix = archive_suffix(source_filename)
-
-    if source_suffix:
-        basename = source_filename[:-len(source_suffix)]
-    else:
-        basename = Path(source_filename).stem
-
-    return f"{basename}.zip"
 
 
 def unique_filename(
@@ -357,7 +328,6 @@ def unique_download_path(
 # ============================================================================
 # Téléchargement et création des ZIP
 # ============================================================================
-
 
 def download_url(
     url: str,
@@ -436,30 +406,9 @@ def download_url(
     return destination
 
 
-def create_zip_archive(
-    source_file: Path,
-    zip_file: Path,
-    inner_filename: str,
-) -> Path:
-    """Crée un fichier ZIP contenant le fichier source."""
-    with zipfile.ZipFile(
-        zip_file,
-        mode="w",
-        compression=zipfile.ZIP_STORED,
-        allowZip64=True,
-    ) as archive:
-        archive.write(
-            source_file,
-            arcname=clean_filename(inner_filename),
-        )
-
-    return zip_file
-
-
 # ============================================================================
 # Extraction des archives
 # ============================================================================
-
 
 def is_archive(path: Path) -> bool:
     """Indique si le fichier possède une extension d'archive supportée."""
@@ -704,7 +653,6 @@ def prepare_extracted_files(
 # Réponses API
 # ============================================================================
 
-
 def response_json(
     response: requests.Response,
     service: str,
@@ -784,7 +732,6 @@ def find_upload_url(payload: dict[str, Any]) -> str | None:
 # ============================================================================
 # GoFile
 # ============================================================================
-
 
 def get_gofile_server(timeout: int) -> str:
     """Retourne un serveur GoFile disponible."""
@@ -879,7 +826,6 @@ def upload_gofile(
 # FileDitch
 # ============================================================================
 
-
 def upload_fileditch(
     file_path: Path,
     filename: str,
@@ -923,7 +869,6 @@ def upload_fileditch(
 # ============================================================================
 # MultiUp
 # ============================================================================
-
 
 def get_multiup_upload_endpoint(timeout: int) -> str:
     """Retourne l'endpoint MultiUp le plus rapide."""
@@ -1089,7 +1034,6 @@ def upload_local_file(
 # Traitement des uploads
 # ============================================================================
 
-
 def upload_with_retry(
     api: str,
     source_url: str,
@@ -1152,59 +1096,84 @@ def run_archive_mode(
     temporary_dir: Path,
 ) -> list[dict[str, Any]]:
     """
-    Télécharge chaque fichier, crée un ZIP puis l'envoie.
+    Télécharge toutes les URLs, crée un seul ZIP et l'envoie.
+
+    Les URLs identiques sont conservées. Si trois URLs téléchargent
+    un fichier nommé exemple.txt, le ZIP contiendra :
+
+        exemple.txt
+        exemple_2.txt
+        exemple_3.txt
     """
-    uploads: list[dict[str, Any]] = []
-    used_names: set[str] = set()
+    if not urls:
+        raise ValueError("Aucune URL à archiver.")
 
-    # Les ZIP générés sont séparés des fichiers téléchargés.
-    zip_dir = temporary_dir / "generated_zips"
-    zip_dir.mkdir(parents=True, exist_ok=True)
+    downloaded_files: list[tuple[str, Path]] = []
 
-    for index, url in enumerate(urls):
-        custom_name = (
-            custom_names[index]
-            if index < len(custom_names)
-            else None
-        )
-
+    # Téléchargement de toutes les URLs
+    for url in urls:
         local_file = download_url(
             url=url,
             destination_dir=temporary_dir,
             timeout=timeout,
         )
 
-        inner_filename = clean_filename(local_file.name)
+        downloaded_files.append((url, local_file))
 
-        filename = zip_archive_filename(
-            source_filename=inner_filename,
-            custom_filename=custom_name,
-        )
+    # Le premier nom personnalisé sert de nom au ZIP global.
+    if custom_names and custom_names[0]:
+        archive_filename = clean_filename(custom_names[0])
 
-        filename = unique_filename(
-            filename=filename,
-            used=used_names,
-        )
+        if not archive_filename.lower().endswith(".zip"):
+            archive_filename += ".zip"
+    else:
+        archive_filename = "archive.zip"
 
-        zip_path = zip_dir / filename
+    zip_dir = temporary_dir / "generated_zips"
+    zip_dir.mkdir(parents=True, exist_ok=True)
 
-        create_zip_archive(
-            source_file=local_file,
-            zip_file=zip_path,
-            inner_filename=inner_filename,
-        )
+    zip_path = zip_dir / archive_filename
 
-        uploads.append(
-            upload_with_retry(
-                api=api,
-                source_url=url,
-                file_path=zip_path,
-                filename=filename,
-                timeout=timeout,
+    used_inner_names: set[str] = set()
+
+    # Création d'un seul ZIP contenant tous les fichiers
+    with zipfile.ZipFile(
+        zip_path,
+        mode="w",
+        compression=zipfile.ZIP_STORED,
+        allowZip64=True,
+    ) as archive:
+        for _source_url, local_file in downloaded_files:
+            inner_filename = unique_filename(
+                filename=local_file.name,
+                used=used_inner_names,
             )
-        )
 
-    return uploads
+            archive.write(
+                local_file,
+                arcname=inner_filename,
+            )
+
+    print(
+        f"\n[ZIP CRÉÉ] {archive_filename} "
+        f"({len(downloaded_files)} fichier(s))"
+    )
+
+    # Un seul upload du ZIP global
+    source_urls = "\n".join(
+        source_url
+        for source_url, _local_file in downloaded_files
+    )
+
+    upload = upload_with_retry(
+        api=api,
+        source_url=source_urls,
+        file_path=zip_path,
+        filename=archive_filename,
+        timeout=timeout,
+    )
+
+    return [upload]
 
 
 def run_desarchive_mode(
@@ -1251,7 +1220,6 @@ def run_desarchive_mode(
 # Arguments
 # ============================================================================
 
-
 def parse_arguments() -> argparse.Namespace:
     """Analyse les arguments de ligne de commande."""
     parser = argparse.ArgumentParser(
@@ -1266,7 +1234,7 @@ def parse_arguments() -> argparse.Namespace:
         required=True,
         choices=("archive", "desarchive"),
         help=(
-            "archive = crée un ZIP contenant chaque fichier téléchargé ; "
+            "archive = crée un seul ZIP contenant tous les fichiers ; "
             "desarchive = extrait une archive et envoie son contenu."
         ),
     )
@@ -1287,8 +1255,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--filenames",
         help=(
-            "Noms personnalisés séparés par des espaces. "
-            "Utilisez des guillemets pour les espaces."
+            "Nom personnalisé du ZIP. "
+            "Exemple : --filenames \"2\" crée 2.zip."
         ),
     )
 
@@ -1332,10 +1300,10 @@ def validate_arguments(
             "Le mode desarchive nécessite exactement une URL."
         )
 
-    if len(custom_names) > len(urls):
+    if args.mode == "archive" and len(custom_names) > 1:
         raise ValueError(
-            "Le nombre de noms personnalisés ne peut pas "
-            "dépasser le nombre d'URLs."
+            "Le mode archive accepte un seul nom personnalisé "
+            "pour le ZIP global."
         )
 
     if args.mode == "desarchive" and custom_names:
@@ -1349,7 +1317,6 @@ def validate_arguments(
 # ============================================================================
 # Programme principal
 # ============================================================================
-
 
 def main() -> int:
     """Point d'entrée principal."""
