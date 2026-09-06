@@ -29,6 +29,7 @@ FILEDITCH_ENDPOINT = "https://new.fileditch.com/upload.php"
 MULTIUP_FASTEST_SERVER_ENDPOINT = (
     "https://multiup.io/api/get-fastest-server"
 )
+
 MULTIUP_LOGIN_ENDPOINT = "https://multiup.io/api/login"
 
 USER_AGENT = "Mozilla/5.0"
@@ -835,6 +836,57 @@ def run_archive_mode(
     return [upload]
 
 
+def run_reupload_mode(
+    uploader: Uploader,
+    urls: list[str],
+    custom_names: list[str | None],
+    timeout: int,
+    temporary_dir: Path,
+) -> list[dict[str, Any]]:
+    """Télécharge puis ré-envoie les fichiers sans les modifier."""
+    if not urls:
+        raise ValueError("Aucune URL à ré-uploader.")
+
+    if custom_names and len(custom_names) != len(urls):
+        raise ValueError(
+            "En mode re-upload, il faut fournir exactement "
+            "un nom par URL."
+        )
+
+    uploads: list[dict[str, Any]] = []
+    used_names: set[str] = set()
+
+    for index, url in enumerate(urls):
+        local_file = download_url(
+            url=url,
+            destination_dir=temporary_dir,
+            timeout=timeout,
+        )
+
+        custom_name = (
+            custom_names[index]
+            if custom_names
+            else None
+        )
+
+        filename = unique_filename(
+            filename=custom_name or local_file.name,
+            used=used_names,
+        )
+
+        uploads.append(
+            upload_with_retry(
+                uploader=uploader,
+                source_url=url,
+                file_path=local_file,
+                filename=filename,
+                timeout=timeout,
+            )
+        )
+
+    return uploads
+
+
 def run_desarchive_mode(
     uploader: Uploader,
     api: str,
@@ -884,17 +936,19 @@ def parse_arguments() -> argparse.Namespace:
     """Analyse les arguments de ligne de commande."""
     parser = argparse.ArgumentParser(
         description=(
-            "Télécharge, archive, désarchive et envoie des fichiers."
+            "Télécharge, archive, désarchive, ré-uploade "
+            "et envoie des fichiers."
         )
     )
 
     parser.add_argument(
         "--mode",
         required=True,
-        choices=("archive", "desarchive"),
+        choices=("archive", "desarchive", "re-upload"),
         help=(
             "archive = crée un ZIP ; "
-            "desarchive = extrait une archive."
+            "desarchive = extrait une archive ; "
+            "re-upload = ré-envoie les fichiers sans modification."
         ),
     )
 
@@ -908,7 +962,8 @@ def parse_arguments() -> argparse.Namespace:
         "--filenames",
         help=(
             "Nom personnalisé du ZIP final en mode archive. "
-            "Utiliser des guillemets avec les espaces."
+            "En mode re-upload, fournir un nom par URL, "
+            "dans le même ordre."
         ),
     )
 
@@ -958,6 +1013,13 @@ def validate_arguments(
             "pour le ZIP global."
         )
 
+    if args.mode == "re-upload":
+        if custom_names and len(custom_names) != len(urls):
+            raise ValueError(
+                "Le mode re-upload nécessite exactement "
+                "un nom par URL."
+            )
+
     if args.mode == "desarchive" and custom_names:
         print(
             "Avertissement : le nom personnalisé est ignoré "
@@ -1004,11 +1066,21 @@ def main(
                     timeout=args.timeout,
                     temporary_dir=temporary_dir,
                 )
-            else:
+
+            elif args.mode == "desarchive":
                 uploads = run_desarchive_mode(
                     uploader=uploader,
                     api=api,
                     url=urls[0],
+                    timeout=args.timeout,
+                    temporary_dir=temporary_dir,
+                )
+
+            else:
+                uploads = run_reupload_mode(
+                    uploader=uploader,
+                    urls=urls,
+                    custom_names=custom_names,
                     timeout=args.timeout,
                     temporary_dir=temporary_dir,
                 )
