@@ -1,32 +1,25 @@
 #!/usr/bin/env python3
 """
-Téléchargement, extraction et upload de fichiers.
+Télécharge, extrait et envoie des fichiers vers GoFile, FileDitch ou MultiUp.
 
-APIs prises en charge :
-- GoFile
-- FileDitch
-- MultiUp
+Modes disponibles :
+- archive    : télécharge chaque URL puis envoie le fichier complet ;
+- desarchive : télécharge une archive, l'extrait récursivement et envoie
+               chaque fichier autorisé séparément.
 
-Modes :
-- archive :
-    Télécharge chaque URL puis envoie le fichier complet.
-- desarchive :
-    Télécharge une archive, l'extrait récursivement puis envoie
-    chaque fichier autorisé séparément.
-
-Variables d'environnement optionnelles :
+Variables d'environnement facultatives :
 
 GoFile :
-    GOFILE_TOKEN
-    GOFILE_FOLDER_ID
+- GOFILE_TOKEN
+- GOFILE_FOLDER_ID
 
 MultiUp :
-    MULTIUP_USERNAME
-    MULTIUP_PASSWORD
+- MULTIUP_USERNAME
+- MULTIUP_PASSWORD
 
 GitHub Actions :
-    GITHUB_OUTPUT
-    GITHUB_STEP_SUMMARY
+- GITHUB_OUTPUT
+- GITHUB_STEP_SUMMARY
 """
 
 from __future__ import annotations
@@ -59,16 +52,18 @@ from tqdm import tqdm
 GOFILE_SERVERS_ENDPOINT = "https://api.gofile.io/servers"
 FILEDITCH_ENDPOINT = "https://new.fileditch.com/upload.php"
 
-MULTIUP_ENDPOINT = "https://multiup.io/upload/index.php"
+MULTIUP_FASTEST_SERVER_ENDPOINT = (
+    "https://multiup.io/api/get-fastest-server"
+)
 MULTIUP_LOGIN_ENDPOINT = "https://multiup.io/api/login"
 
-USER_AGENT = "github-actions-upload-api/2.0"
+USER_AGENT = "Mozilla/5.0 (Android 15; Mobile; rv:136.0) Gecko/136.0 Firefox/136.0"
 
+DEFAULT_TIMEOUT = 60
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 10
-CHUNK_SIZE = 1024 * 1024
+CHUNK_SIZE = 10 * 1024 * 1024
 MAX_FILE_SIZE = 150 * 1024 * 1024 * 1024
-DEFAULT_TIMEOUT = 60
 
 ESCAPE_TOKEN = "<echap>"
 
@@ -105,6 +100,19 @@ BLOCKED_EXTENSIONS = {
     ".wsf",
 }
 
+ARCHIVE_SUFFIXES = (
+    ".zip",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".tar.gz",
+    ".tgz",
+    ".tar.bz2",
+    ".tbz2",
+    ".tar.xz",
+    ".txz",
+)
+
 
 # ============================================================================
 # GitHub Actions
@@ -112,7 +120,7 @@ BLOCKED_EXTENSIONS = {
 
 
 def github_output(name: str, value: str) -> None:
-    """Écrit une valeur dans GITHUB_OUTPUT si le script tourne dans Actions."""
+    """Écrit une valeur dans le fichier GITHUB_OUTPUT."""
     output_file = os.environ.get("GITHUB_OUTPUT")
 
     if not output_file:
@@ -129,7 +137,7 @@ def github_summary(
     mode: str,
     uploads: list[dict[str, Any]],
 ) -> None:
-    """Ajoute un résumé des uploads dans le résumé GitHub Actions."""
+    """Ajoute les détails des uploads au résumé GitHub Actions."""
     summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
 
     if not summary_file:
@@ -141,10 +149,10 @@ def github_summary(
         file.write(f"- API : `{api}`\n")
         file.write(f"- Nombre de fichiers : `{len(uploads)}`\n\n")
 
-        for item in uploads:
-            file.write(f"### {item['filename']}\n\n")
-            file.write(f"- Taille : `{item['size']}` octets\n")
-            file.write(f"- URL : {item['url']}\n\n")
+        for upload in uploads:
+            file.write(f"### {upload['filename']}\n\n")
+            file.write(f"- Taille : `{upload['size']}` octets\n")
+            file.write(f"- URL : {upload['url']}\n\n")
 
 
 # ============================================================================
@@ -153,44 +161,38 @@ def github_summary(
 
 
 def clean_filename(filename: str) -> str:
-    """
-    Nettoie un nom de fichier provenant d'une URL ou d'une réponse HTTP.
-    """
+    """Nettoie un nom de fichier fourni par une URL ou HTTP."""
     filename = unquote(filename)
-    filename = filename.replace("\\", "_")
-    filename = filename.replace("/", "_")
+    filename = filename.replace("\\", "_").replace("/", "_")
     filename = re.sub(r"[\x00-\x1f\x7f]", "_", filename)
     filename = filename.strip(" .")
+
+    return filename[:240] or "downloaded_file"
+
+
+def filename_from_url(url: str) -> str:
+    """Déduit un nom de fichier depuis une URL."""
+    filename = Path(unquote(urlparse(url).path)).name
 
     if not filename:
         return "downloaded_file"
 
-    return filename[:240]
-
-
-def filename_from_url(url: str) -> str:
-    """Retourne un nom de fichier déduit depuis une URL."""
-    name = Path(unquote(urlparse(url).path)).name
-
-    if not name:
-        return "downloaded_file"
-
-    return clean_filename(name)
+    return clean_filename(filename)
 
 
 def filename_from_response(
     response: requests.Response,
     url: str,
 ) -> str:
-    """
-    Détermine le nom de fichier à partir de Content-Disposition,
-    de l'URL ou du Content-Type.
-    """
-    header = response.headers.get("Content-Disposition", "")
+    """Détermine le nom depuis Content-Disposition, l'URL ou le MIME."""
+    content_disposition = response.headers.get(
+        "Content-Disposition",
+        "",
+    )
 
     match = re.search(
         r"filename\*=UTF-8''([^;]+)",
-        header,
+        content_disposition,
         flags=re.IGNORECASE,
     )
 
@@ -199,7 +201,7 @@ def filename_from_response(
 
     match = re.search(
         r'filename="?([^";]+)"?',
-        header,
+        content_disposition,
         flags=re.IGNORECASE,
     )
 
@@ -220,34 +222,29 @@ def filename_from_response(
 
 
 def parse_urls(value: str) -> list[str]:
-    """Extrait les URLs HTTP et HTTPS uniques d'une chaîne."""
-    urls = re.findall(
+    """Extrait les URLs HTTP et HTTPS uniques."""
+    found_urls = re.findall(
         r"https?://[^\s]+",
         value,
         flags=re.IGNORECASE,
     )
 
-    result: list[str] = []
+    urls: list[str] = []
 
-    for url in urls:
+    for url in found_urls:
         url = url.strip().rstrip(",;")
 
-        if url and url not in result:
-            result.append(url)
+        if url and url not in urls:
+            urls.append(url)
 
-    return result
+    return urls
 
 
 def parse_custom_filenames(
     value: str | None,
     escape_enabled: bool,
 ) -> list[str | None]:
-    """
-    Analyse les noms personnalisés.
-
-    Exemple :
-        "fichier un.zip" fichier deux.zip <echap>
-    """
+    """Analyse les noms personnalisés séparés par des espaces."""
     if not value or not value.strip():
         return []
 
@@ -282,7 +279,7 @@ def unique_filename(
     filename: str,
     used: set[str],
 ) -> str:
-    """Évite les collisions entre fichiers extraits."""
+    """Évite les collisions de noms."""
     filename = clean_filename(filename)
 
     if filename not in used:
@@ -312,10 +309,10 @@ def download_url(
     destination_dir: Path,
     timeout: int,
 ) -> Path:
-    """Télécharge une URL HTTP ou HTTPS dans un dossier temporaire."""
-    parsed = urlparse(url)
+    """Télécharge une URL dans un dossier temporaire."""
+    parsed_url = urlparse(url)
 
-    if parsed.scheme not in {"http", "https"}:
+    if parsed_url.scheme not in {"http", "https"}:
         raise ValueError(f"URL non supportée : {url}")
 
     print(f"\n[TÉLÉCHARGEMENT] {url}")
@@ -333,7 +330,6 @@ def download_url(
             response,
             response.url,
         )
-
         destination = destination_dir / filename
 
         content_length = response.headers.get("Content-Length")
@@ -387,37 +383,22 @@ def download_url(
 
 
 def is_archive(path: Path) -> bool:
-    """Indique si un fichier possède une extension d'archive supportée."""
-    return path.name.lower().endswith(
-        (
-            ".zip",
-            ".7z",
-            ".rar",
-            ".tar",
-            ".tar.gz",
-            ".tgz",
-            ".tar.bz2",
-            ".tbz2",
-            ".tar.xz",
-            ".txz",
-        )
-    )
+    """Indique si le fichier possède une extension d'archive supportée."""
+    return path.name.lower().endswith(ARCHIVE_SUFFIXES)
 
 
 def safe_path(root: Path, member_name: str) -> Path:
-    """
-    Empêche les chemins de type ../../fichier lors de l'extraction.
-    """
-    member_name = member_name.replace("\\", "/")
-    relative = Path(member_name)
+    """Empêche les chemins absolus et les traversées de répertoire."""
+    normalized_name = member_name.replace("\\", "/")
+    relative_path = Path(normalized_name)
 
-    if relative.is_absolute():
+    if relative_path.is_absolute():
         raise ValueError(
             f"Chemin absolu interdit dans l'archive : {member_name}"
         )
 
     root = root.resolve()
-    target = (root / relative).resolve()
+    target = (root / relative_path).resolve()
 
     try:
         target.relative_to(root)
@@ -433,7 +414,7 @@ def extract_zip(
     archive: Path,
     output: Path,
 ) -> None:
-    """Extrait une archive ZIP avec contrôle des chemins."""
+    """Extrait une archive ZIP en contrôlant chaque chemin."""
     with zipfile.ZipFile(archive) as zip_file:
         for info in zip_file.infolist():
             destination = safe_path(output, info.filename)
@@ -483,7 +464,7 @@ def extract_tar(
 
 
 def run_7z(command: list[str]) -> None:
-    """Exécute 7z et convertit les erreurs en exceptions Python."""
+    """Exécute une commande 7z."""
     result = subprocess.run(
         command,
         capture_output=True,
@@ -492,26 +473,23 @@ def run_7z(command: list[str]) -> None:
         errors="replace",
     )
 
-    if result.returncode != 0:
-        message = (
-            result.stderr.strip()
-            or result.stdout.strip()
-            or "Erreur inconnue de 7z."
-        )
+    if result.returncode == 0:
+        return
 
-        raise RuntimeError(message)
+    message = (
+        result.stderr.strip()
+        or result.stdout.strip()
+        or "Erreur inconnue de 7z."
+    )
+
+    raise RuntimeError(message)
 
 
 def extract_7z_or_rar(
     archive: Path,
     output: Path,
 ) -> None:
-    """
-    Teste puis extrait une archive 7z ou RAR.
-
-    L'option -aoa permet d'écraser les fichiers précédents dans le dossier
-    temporaire d'extraction.
-    """
+    """Teste puis extrait une archive 7z ou RAR."""
     output.mkdir(parents=True, exist_ok=True)
 
     run_7z(
@@ -550,14 +528,14 @@ def extract_archive(
     archive: Path,
     output: Path,
 ) -> None:
-    """Sélectionne le moteur d'extraction selon l'extension."""
-    name = archive.name.lower()
+    """Sélectionne le moteur d'extraction adapté."""
+    archive_name = archive.name.lower()
 
-    if name.endswith(".zip"):
+    if archive_name.endswith(".zip"):
         extract_zip(archive, output)
         return
 
-    if name.endswith(
+    if archive_name.endswith(
         (
             ".tar",
             ".tar.gz",
@@ -571,7 +549,7 @@ def extract_archive(
         extract_tar(archive, output)
         return
 
-    if name.endswith((".7z", ".rar")):
+    if archive_name.endswith((".7z", ".rar")):
         extract_7z_or_rar(archive, output)
         return
 
@@ -581,7 +559,7 @@ def extract_archive(
 
 
 def collect_files(directory: Path) -> list[Path]:
-    """Retourne les fichiers ordinaires d'un dossier, triés."""
+    """Retourne les fichiers ordinaires triés."""
     return [
         path
         for path in sorted(directory.rglob("*"))
@@ -590,7 +568,7 @@ def collect_files(directory: Path) -> list[Path]:
 
 
 def extract_nested_archives(directory: Path) -> None:
-    """Extrait les archives trouvées dans les archives déjà extraites."""
+    """Extrait récursivement les archives trouvées."""
     processed: set[Path] = set()
 
     while True:
@@ -605,15 +583,13 @@ def extract_nested_archives(directory: Path) -> None:
 
         for archive in archives:
             processed.add(archive)
-
             output = archive.parent / f"{archive.stem}_extracted"
 
             try:
                 extract_archive(archive, output)
             except Exception as error:
                 print(
-                    f"[ERREUR EXTRACTION] "
-                    f"{archive.name} : {error}",
+                    f"[ERREUR EXTRACTION] {archive.name} : {error}",
                     file=sys.stderr,
                 )
 
@@ -622,11 +598,7 @@ def prepare_extracted_files(
     archive: Path,
     temporary_dir: Path,
 ) -> list[Path]:
-    """
-    Extrait l'archive principale et les archives imbriquées.
-
-    Les archives et extensions bloquées ne sont pas envoyées.
-    """
+    """Extrait l'archive principale et ses archives imbriquées."""
     extract_dir = temporary_dir / "extracted"
     extract_dir.mkdir(parents=True, exist_ok=True)
 
@@ -674,8 +646,8 @@ def response_json(
 
 
 def is_success_error(value: Any) -> bool:
-    """Interprète les valeurs de succès utilisées par les APIs."""
-    return value in (
+    """Reconnaît les différentes valeurs de succès des APIs."""
+    return value in {
         None,
         "",
         False,
@@ -684,13 +656,11 @@ def is_success_error(value: Any) -> bool:
         "ok",
         "OK",
         "success",
-    )
+    }
 
 
 def find_upload_url(payload: dict[str, Any]) -> str | None:
-    """
-    Cherche un lien dans les formats de réponse courants des services.
-    """
+    """Recherche récursivement une URL dans une réponse API."""
     direct_keys = (
         "link",
         "url",
@@ -720,7 +690,7 @@ def find_upload_url(payload: dict[str, Any]) -> str | None:
             if result:
                 return result
 
-        if isinstance(value, list):
+        elif isinstance(value, list):
             for item in value:
                 if isinstance(item, dict):
                     result = find_upload_url(item)
@@ -732,12 +702,12 @@ def find_upload_url(payload: dict[str, Any]) -> str | None:
 
 
 # ============================================================================
-# APIs d'upload
+# GoFile
 # ============================================================================
 
 
 def get_gofile_server(timeout: int) -> str:
-    """Récupère un serveur GoFile disponible."""
+    """Retourne un serveur GoFile disponible."""
     response = requests.get(
         GOFILE_SERVERS_ENDPOINT,
         timeout=timeout,
@@ -825,6 +795,11 @@ def upload_gofile(
     return url, int(size)
 
 
+# ============================================================================
+# FileDitch
+# ============================================================================
+
+
 def upload_fileditch(
     file_path: Path,
     filename: str,
@@ -865,14 +840,56 @@ def upload_fileditch(
     return url, int(size)
 
 
+# ============================================================================
+# MultiUp
+# ============================================================================
+
+
+def get_multiup_upload_endpoint(timeout: int) -> str:
+    """Retourne l'endpoint MultiUp le plus rapide."""
+    response = requests.get(
+        MULTIUP_FASTEST_SERVER_ENDPOINT,
+        timeout=timeout,
+        headers={"User-Agent": USER_AGENT},
+    )
+    response.raise_for_status()
+
+    payload = response_json(
+        response,
+        "MultiUp fastest server",
+    )
+
+    if not is_success_error(payload.get("error")):
+        raise RuntimeError(
+            f"MultiUp n'a pas retourné de serveur valide : {payload}"
+        )
+
+    endpoint = payload.get("server")
+
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        raise RuntimeError(
+            f"Le champ server est absent de la réponse MultiUp : {payload}"
+        )
+
+    endpoint = endpoint.strip()
+    parsed_endpoint = urlparse(endpoint)
+
+    if parsed_endpoint.scheme not in {"http", "https"}:
+        raise RuntimeError(
+            f"Schéma invalide pour l'endpoint MultiUp : {endpoint}"
+        )
+
+    if not parsed_endpoint.netloc:
+        raise RuntimeError(
+            f'Endpoint MultiUp invalide : {endpoint}'
+        )
+
+    return endpoint
+
+
 @lru_cache(maxsize=1)
 def get_multiup_user(timeout: int) -> str | None:
-    """
-    Connecte l'utilisateur à MultiUp et retourne son identifiant.
-
-    La connexion est facultative. Si aucun identifiant n'est fourni,
-    le fichier est envoyé sans paramètre user.
-    """
+    """Connecte l'utilisateur à MultiUp si les identifiants sont présents."""
     username = os.environ.get("MULTIUP_USERNAME", "").strip()
     password = os.environ.get("MULTIUP_PASSWORD", "")
 
@@ -894,7 +911,6 @@ def get_multiup_user(timeout: int) -> str | None:
         timeout=timeout,
         headers={"User-Agent": USER_AGENT},
     )
-
     response.raise_for_status()
 
     payload = response_json(response, "MultiUp")
@@ -908,8 +924,7 @@ def get_multiup_user(timeout: int) -> str | None:
 
     if user_id is None:
         raise RuntimeError(
-            "MultiUp n'a pas retourné d'identifiant utilisateur : "
-            f"{payload}"
+            f"MultiUp n'a pas retourné d'identifiant utilisateur : {payload}"
         )
 
     return str(user_id)
@@ -920,13 +935,8 @@ def upload_multiup(
     filename: str,
     timeout: int,
 ) -> tuple[str, int]:
-    """
-    Envoie un fichier vers MultiUp.
-
-    L'API MultiUp attend :
-        files[] : fichier
-        user     : identifiant utilisateur facultatif
-    """
+    """Envoie un fichier vers le serveur MultiUp le plus rapide."""
+    endpoint = get_multiup_upload_endpoint(timeout)
     user_id = get_multiup_user(timeout)
 
     data: dict[str, str] = {}
@@ -936,7 +946,7 @@ def upload_multiup(
 
     with file_path.open("rb") as file:
         response = requests.post(
-            MULTIUP_ENDPOINT,
+            endpoint,
             files={
                 "files[]": (
                     filename,
@@ -976,17 +986,17 @@ def upload_local_file(
     filename: str,
     timeout: int,
 ) -> tuple[str, int]:
-    """Sélectionne l'API d'upload appropriée."""
+    """Sélectionne l'API d'upload."""
     uploaders = {
         "gofile": upload_gofile,
         "fileditch": upload_fileditch,
         "multiup": upload_multiup,
     }
 
-    uploader = uploaders.get(api)
-
-    if uploader is None:
-        raise ValueError(f"API inconnue : {api}")
+    try:
+        uploader = uploaders[api]
+    except KeyError as error:
+        raise ValueError(f"API inconnue : {api}") from error
 
     return uploader(file_path, filename, timeout)
 
@@ -1043,12 +1053,10 @@ def upload_with_retry(
                 print(
                     f"Nouvelle tentative dans {delay} secondes..."
                 )
-
                 time.sleep(delay)
 
     raise RuntimeError(
-        f"Échec définitif de l'upload de {filename} : "
-        f"{last_error}"
+        f"Échec définitif de l'upload de {filename} : {last_error}"
     )
 
 
@@ -1059,9 +1067,7 @@ def run_archive_mode(
     timeout: int,
     temporary_dir: Path,
 ) -> list[dict[str, Any]]:
-    """
-    Télécharge et envoie chaque URL comme fichier complet.
-    """
+    """Télécharge et envoie chaque URL comme fichier complet."""
     uploads: list[dict[str, Any]] = []
 
     for index, url in enumerate(urls):
@@ -1072,7 +1078,6 @@ def run_archive_mode(
         )
 
         filename = get_filename(url, custom_name)
-
         local_file = download_url(
             url=url,
             destination_dir=temporary_dir,
@@ -1098,9 +1103,7 @@ def run_desarchive_mode(
     timeout: int,
     temporary_dir: Path,
 ) -> list[dict[str, Any]]:
-    """
-    Télécharge une archive, l'extrait et envoie ses fichiers autorisés.
-    """
+    """Télécharge une archive et envoie ses fichiers autorisés."""
     archive = download_url(
         url=url,
         destination_dir=temporary_dir,
@@ -1135,12 +1138,12 @@ def run_desarchive_mode(
 
 
 # ============================================================================
-# Arguments et programme principal
+# Arguments
 # ============================================================================
 
 
 def parse_arguments() -> argparse.Namespace:
-    """Définit et analyse les arguments de ligne de commande."""
+    """Analyse les arguments de ligne de commande."""
     parser = argparse.ArgumentParser(
         description=(
             "Télécharge, désarchive et envoie des fichiers "
@@ -1200,7 +1203,7 @@ def validate_arguments(
     urls: list[str],
     custom_names: list[str | None],
 ) -> None:
-    """Valide les contraintes entre les différents arguments."""
+    """Valide les arguments et leurs combinaisons."""
     if args.timeout <= 0:
         raise ValueError(
             "Le timeout doit être supérieur à zéro."
@@ -1224,16 +1227,20 @@ def validate_arguments(
 
     if args.mode == "desarchive" and custom_names:
         print(
-            "Avertissement : les noms personnalisés sont "
-            "ignorés en mode desarchive.",
+            "Avertissement : les noms personnalisés sont ignorés "
+            "en mode desarchive.",
             file=sys.stderr,
         )
 
 
-def main() -> int:
-    """Point d'entrée principal du programme."""
-    args = parse_arguments()
+# ============================================================================
+# Programme principal
+# ============================================================================
 
+
+def main() -> int:
+    """Point d'entrée principal."""
+    args = parse_arguments()
     urls = parse_urls(args.source_urls)
 
     try:
@@ -1283,12 +1290,12 @@ def main() -> int:
         )
         return 1
 
-    urls_text = "\n".join(
-        item["url"]
-        for item in uploads
+    file_urls = "\n".join(
+        upload["url"]
+        for upload in uploads
     )
 
-    github_output("file_urls", urls_text)
+    github_output("file_urls", file_urls)
     github_output("file_url", uploads[-1]["url"])
 
     github_summary(
@@ -1301,9 +1308,9 @@ def main() -> int:
     print("Tous les uploads sont terminés.")
     print("=" * 70)
 
-    for item in uploads:
+    for upload in uploads:
         print(
-            f"{item['filename']} -> {item['url']}"
+            f"{upload['filename']} -> {upload['url']}"
         )
 
     return 0
