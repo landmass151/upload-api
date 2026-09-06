@@ -43,11 +43,6 @@ on:
         type: boolean
         default: false
 
-      timeout:
-        description: "Timeout de connexion en secondes"
-        required: true
-        default: "60"
-        type: string
 
 permissions:
   contents: read
@@ -112,7 +107,6 @@ jobs:
           SOURCE_URLS: ${{ inputs.source_urls }}
           CUSTOM_FILENAMES: ${{ inputs.filename }}
           ENABLE_ESCAPE: ${{ inputs.escape }}
-          TIMEOUT: ${{ inputs.timeout }}
 
           GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
           GOFILE_FOLDER_ID: ${{ secrets.GOFILE_FOLDER_ID }}
@@ -128,7 +122,6 @@ jobs:
             --mode "$MODE"
             --api "$API"
             --source-urls "$SOURCE_URLS"
-            --timeout "$TIMEOUT"
           )
 
           if [ -n "$CUSTOM_FILENAMES" ]; then
