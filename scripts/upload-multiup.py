@@ -115,21 +115,24 @@ def upload_multiup(
     endpoint = get_multiup_upload_endpoint(timeout)
     user_id = get_multiup_user(timeout)
 
-    data: dict[str, str] = {
+    data: dict[str, str] = {}
+
+    if user_id:
+        data["user"] = user_id
+    
+    params = {
         "1fichier.com": "true",
         "fireload.com": "true",
         "gofile.io": "true",
         "hexload.com": "true",
         "rapidgator.net": "true",
-        "vikingfile.com": "true"
+        "vikingfile.com": "true",
     }
-
-    if user_id:
-        data["user"] = user_id
-
+    
     with file_path.open("rb") as file:
         response = requests.post(
             endpoint,
+            params=params,
             files={
                 "files[]": (
                     filename,
