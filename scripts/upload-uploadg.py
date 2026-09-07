@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import mimitypes
 import os
 from pathlib import Path
 
@@ -69,9 +70,8 @@ def upload_uploadg(
         )
 
     mime = (
-        __import__("mimetypes")
-        .guess_type(filename)[0]
-        or "application/octet-stream"
+       mimetypes.guess_type(filename)[0]
+       or "application/octet-stream"
     )
 
     total_parts = math.ceil(size / UPLOADG_CHUNK_SIZE)
