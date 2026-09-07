@@ -17,13 +17,13 @@ on:
         description: "Hébergeurs séparés par des virgules"
         required: true
         type: string
-        default: "gofile,fileditch"
+        default: "gofile,fileditch,uploadg,multiup"
 
       archive_name:
         description: "Nom du ZIP en mode archiver"
         required: true
         type: string
-        default: "remote-files.zip"
+        default: "Archive.zip"
 
 jobs:
   remote-upload:
