@@ -40,7 +40,7 @@ jobs:
 
     steps:
       - name: Télécharger le dépôt
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Installer Python
         uses: actions/setup-python@v5
@@ -60,3 +60,4 @@ jobs:
             --archive-name "${{ inputs.archive_name }}" \
             --urls urls.txt \
             --names names.txt \
+            --output upload-results.json
