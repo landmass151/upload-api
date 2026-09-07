@@ -1,6 +1,5 @@
 name: Upload API
-# Le fichier est situé à l’emplacement suivant :
-# .github/workflows/upload-api.yml
+
 on:
   workflow_dispatch:
     inputs:
@@ -62,6 +61,7 @@ jobs:
 
       - name: Installer les outils système
         if: ${{ inputs.mode == 'desarchive' }}
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -79,6 +79,7 @@ jobs:
           python-version: "3.12"
 
       - name: Installer les dépendances Python
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -92,12 +93,15 @@ jobs:
             requests \
             tqdm
 
-      - name: Vérifier les outils
+      - name: Vérifier l'environnement
+        shell: bash
         run: |
           set -euo pipefail
 
           python --version
-          curl --version
+          python -c "import requests, tqdm; print('Dépendances Python OK')"
+
+          test -f scripts/upload-api.py
 
           if [ "${{ inputs.mode }}" = "desarchive" ]; then
             7z
@@ -126,31 +130,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          case "$API" in
-            gofile)
-              SCRIPT="scripts/upload-gofile.py"
-              ;;
+          SCRIPT="scripts/upload-api.py"
 
-            fileditch)
-              SCRIPT="scripts/upload-fileditch.py"
-              ;;
-
-            multiup)
-              SCRIPT="scripts/upload-multiup.py"
-              ;;
-
-            uploadg)
-              SCRIPT="scripts/upload-uploadg.py"
-              ;;
-
-            *)
-              echo "API inconnue : $API" >&2
-              exit 1
-              ;;
-          esac
+          if [ ! -f "$SCRIPT" ]; then
+            echo "Erreur : script introuvable : $SCRIPT" >&2
+            exit 1
+          fi
 
           command=(
             python "$SCRIPT"
+            --api "$API"
             --mode "$MODE"
             --source-urls "$SOURCE_URLS"
           )
@@ -167,11 +156,13 @@ jobs:
           fi
 
           echo "Script utilisé : $SCRIPT"
+          echo "API utilisée : $API"
+          echo "Mode utilisé : $MODE"
 
           "${command[@]}"
 
       - name: Afficher les liens générés
-        if: success()
+        if: ${{ success() }}
         shell: bash
         env:
           FILE_URLS: ${{ steps.upload.outputs.file_urls }}
