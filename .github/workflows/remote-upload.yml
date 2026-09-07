@@ -1,0 +1,78 @@
+name: Remote uploader
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Mode d'exécution"
+        required: true
+        type: choice
+        default: re-upload
+        options:
+          - re-upload
+          - archiver
+          - desarchiver
+
+      providers:
+        description: "Hébergeurs séparés par des virgules"
+        required: true
+        type: string
+        default: "gofile,fileditch"
+
+      archive_name:
+        description: "Nom du ZIP en mode archiver"
+        required: true
+        type: string
+        default: "remote-files.zip"
+
+jobs:
+  remote-upload:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    env:
+      GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
+      UPLOADG_TOKEN: ${{ secrets.UPLOADG_TOKEN }}
+      MULTIUP_USERNAME: ${{ secrets.MULTIUP_USERNAME }}
+      MULTIUP_PASSWORD: ${{ secrets.MULTIUP_PASSWORD }}
+
+    steps:
+      - name: Télécharger le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Exécuter le remote uploader
+        run: |
+          python remote_uploader.py \
+            --mode "${{ inputs.mode }}" \
+            --providers "${{ inputs.providers }}" \
+            --archive-name "${{ inputs.archive_name }}" \
+            --urls urls.txt \
+            --names names.txt \
+            --output upload-results.json
+
+      - name: Afficher les résultats
+        if: always()
+        run: |
+          if [ -f upload-results.json ]; then
+            cat upload-results.json
+          fi
+
+      - name: Publier les résultats
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upload-results
+          path: upload-results.json
+          if-no-files-found: ignore
