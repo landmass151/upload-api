@@ -5,15 +5,13 @@ from pathlib import Path
 import requests
 
 from upload_common import (
+    FILEDITCH_ENDPOINT
     USER_AGENT,
     content_type_for,
     find_upload_url,
     main,
     response_json,
 )
-
-
-FILEDITCH_ENDPOINT = "https://new.fileditch.com/upload.php"
 
 
 def upload_fileditch(
