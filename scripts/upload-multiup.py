@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 import requests
 
 from upload_common import (
+    MULTIUP_FASTEST_SERVER_ENDPOINT,
+    MULTIUP_LOGIN_ENDPOINT,
     USER_AGENT,
     content_type_for,
     find_upload_url,
@@ -17,13 +19,6 @@ from upload_common import (
     main,
     response_json,
 )
-
-
-MULTIUP_FASTEST_SERVER_ENDPOINT = (
-    "https://multiup.io/api/get-fastest-server"
-)
-
-MULTIUP_LOGIN_ENDPOINT = "https://multiup.io/api/login"
 
 
 def get_multiup_upload_endpoint(timeout: int) -> str:
@@ -133,7 +128,7 @@ def upload_multiup(
                     filename,
                     file,
                     content_type_for(filename),
-                ),
+                )
             },
             data=data,
             timeout=(timeout, 3600),
