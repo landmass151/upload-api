@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 from pathlib import Path
 
 import requests
@@ -7,7 +5,6 @@ import requests
 from upload_common import (
     FILEDITCH_ENDPOINT,
     USER_AGENT,
-    content_type_for,
     find_upload_url,
     main,
     response_json,
@@ -20,47 +17,52 @@ def upload_fileditch(
     timeout: int,
 ) -> tuple[str, int]:
     """Envoie un fichier vers FileDitch."""
-    with file_path.open("rb") as file:
-        response = requests.post(
-            FILEDITCH_ENDPOINT,
-            params={"filename": filename},
-            data=file,
-            headers={
-                "Content-Type": content_type_for(filename),
-                "X-Filename": filename,
-                "User-Agent": USER_AGENT,
-            },
-            timeout=(timeout, 3600),
-        )
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://fileditch.com/",
+        "Origin": "https://fileditch.com",
+    }
 
-    response.raise_for_status()
+    with requests.Session() as session:
+        session.headers.update(headers)
 
-    payload = response_json(response, "FileDitch")
+        with file_path.open("rb") as file:
+            response = session.post(
+                FILEDITCH_ENDPOINT,
+                params={"filename": filename},
+                files={
+                    "file": (
+                        filename,
+                        file,
+                        "application/octet-stream",
+                    ),
+                },
+                timeout=(timeout, 3600),
+            )
 
-    if not payload.get("success"):
-        raise RuntimeError(
-            f"FileDitch a refusé l'upload : {payload}"
-        )
+        if response.status_code == 403:
+            body = response.text[:500].replace("\n", " ")
+            raise RuntimeError(
+                f"FileDitch refuse la requête avec HTTP 403 : {body}"
+            )
 
-    url = find_upload_url(payload)
+        response.raise_for_status()
 
-    if not url:
-        raise RuntimeError(
-            f"FileDitch n'a pas retourné d'URL : {payload}"
-        )
+        payload = response_json(response, "FileDitch")
 
-    size = payload.get(
-        "size",
-        file_path.stat().st_size,
-    )
+        if not payload.get("success"):
+            raise RuntimeError(
+                f"FileDitch a refusé l'upload : {payload}"
+            )
 
-    return url, int(size)
+        url = find_upload_url(payload)
 
+        if not url:
+            raise RuntimeError(
+                f"FileDitch n'a pas retourné d'URL : {payload}"
+            )
 
-if __name__ == "__main__":
-    raise SystemExit(
-        main(
-            api="fileditch",
-            uploader=upload_fileditch,
-        )
-    )
+        size = payload.get("size", file_path.stat().st_size)
+
+        return str(url), int(size)
