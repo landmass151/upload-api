@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-import mimitypes
+import mimetypes
 import os
 from pathlib import Path
 
