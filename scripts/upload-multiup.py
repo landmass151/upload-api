@@ -105,7 +105,6 @@ def get_multiup_user(timeout: int) -> str | None:
 
     return str(user_id)
 
-
 def upload_multiup(
     file_path: Path,
     filename: str,
@@ -126,25 +125,14 @@ def upload_multiup(
     hosts_data = response_json(hosts_response, "MultiUp hosts")
     hosts_dict = hosts_data.get("hosts", {})
     
-    selected_hosts = {
-        "1fichier.com",
-        "fireload.com",
-        "gofile.io",
-        "hexload.com",
-        "rapidgator.net",
-        "vikingfile.com",
-    }
-    
     data: dict[str, str] = {}
     
-    for host_name in selected_hosts:
-        if host_name in hosts_dict:
-            host_info = hosts_dict[host_name]
-            host_max_size = int(host_info.get("size", 0))
-            host_max_size_bytes = host_max_size * 1024
-            
-            if file_size <= host_max_size_bytes or host_max_size == 0:
-                data[host_name] = "true"
+    for host_name, host_info in hosts_dict.items():
+        host_max_size = int(host_info.get("size", 0))
+        host_max_size_bytes = host_max_size * 1024
+        
+        if file_size <= host_max_size_bytes or host_max_size == 0:
+            data[host_name] = "true"
     
     if user_id:
         data["user"] = user_id
