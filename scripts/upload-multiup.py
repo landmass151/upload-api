@@ -116,12 +116,12 @@ def upload_multiup(
     user_id = get_multiup_user(timeout)
 
     data: dict[str, str] = {
-        "1fichier.com": true,
-        "fireload.com": true,
-        "gofile.io": true,
-        "hexload.com": true,
-        "rapidgator.net": true,
-        "vikingfile.com": true,
+        "1fichier.com": True,
+        "fireload.com": True,
+        "gofile.io": True,
+        "hexload.com": True,
+        "rapidgator.net": True,
+        "vikingfile.com": True,
     }
 
     if user_id:
