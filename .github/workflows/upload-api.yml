@@ -23,6 +23,7 @@ on:
           - gofile
           - fileditch
           - multiup
+          - uploadg
 
       source_urls:
         description: >-
@@ -120,6 +121,8 @@ jobs:
           MULTIUP_USERNAME: ${{ secrets.MULTIUP_USERNAME }}
           MULTIUP_PASSWORD: ${{ secrets.MULTIUP_PASSWORD }}
 
+          UPLOADG_TOKEN: ${{ secrets.UPLOADG_TOKEN }}
+
         run: |
           set -euo pipefail
 
@@ -134,6 +137,10 @@ jobs:
 
             multiup)
               SCRIPT="scripts/upload-multiup.py"
+              ;;
+
+            uploadg)
+              SCRIPT="scripts/upload-uploadg.py"
               ;;
 
             *)
