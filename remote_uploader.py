@@ -71,6 +71,7 @@ def read_names(filename: str, amount: int) -> list[str | None]:
 
             if len(parsed) == 1:
                 line = parsed[0]
+
         except ValueError:
             line = line.strip('"').strip("'")
 
@@ -178,6 +179,7 @@ def download_remote_file(
 def parse_json_response(response: requests.Response) -> dict:
     try:
         data = response.json()
+
     except ValueError as error:
         raise UploadError(
             f"Réponse JSON invalide ({response.status_code}) : "
@@ -187,6 +189,12 @@ def parse_json_response(response: requests.Response) -> dict:
     if not response.ok:
         raise UploadError(
             f"Erreur HTTP {response.status_code} : "
+            f"{json.dumps(data, ensure_ascii=False)}"
+        )
+
+    if not isinstance(data, dict):
+        raise UploadError(
+            "La réponse JSON n'est pas un objet : "
             f"{json.dumps(data, ensure_ascii=False)}"
         )
 
@@ -209,6 +217,24 @@ def collect_urls(value) -> list[str]:
             urls.extend(collect_urls(item))
 
     return urls
+
+
+def is_success_response(data: dict) -> bool:
+    """
+    Plusieurs hébergeurs utilisent des formats différents.
+    Multiup peut renvoyer {"error": "success"}.
+    """
+
+    error_value = str(data.get("error", "")).strip().lower()
+    status_value = str(data.get("status", "")).strip().lower()
+
+    if error_value in {"success", "ok"}:
+        return True
+
+    if status_value in {"success", "ok"}:
+        return True
+
+    return False
 
 
 def upload_gofile(path: Path, remote_name: str | None) -> str:
@@ -349,7 +375,8 @@ def multiup_login() -> str:
 
     if not username or not password:
         raise UploadError(
-            "Les secrets MULTIUP_USERNAME et MULTIUP_PASSWORD sont absents."
+            "Les secrets MULTIUP_USERNAME et MULTIUP_PASSWORD "
+            "sont absents."
         )
 
     response = http.post(
@@ -363,16 +390,22 @@ def multiup_login() -> str:
 
     data = parse_json_response(response)
 
-    if data.get("error"):
+    # Multiup renvoie parfois :
+    # {"error": "success", "user": "..."}
+    error_value = str(data.get("error", "")).strip().lower()
+
+    if error_value and error_value not in {"success", "ok"}:
         raise UploadError(f"Multiup login : {data['error']}")
 
-    if not data.get("user"):
+    user_id = data.get("user")
+
+    if not user_id:
         raise UploadError(
-            f"Identifiant Multiup absent : "
+            "Identifiant Multiup absent : "
             f"{json.dumps(data, ensure_ascii=False)}"
         )
 
-    return str(data["user"])
+    return str(user_id)
 
 
 def multiup_get_server() -> str:
@@ -382,34 +415,34 @@ def multiup_get_server() -> str:
     )
 
     data = parse_json_response(response)
-    urls = collect_urls(data)
 
-    if urls:
-        return urls[0].rstrip("/")
+    server = data.get("server")
 
-    for key in ("server", "url", "upload", "host"):
-        value = data.get(key)
+    if not isinstance(server, str) or not server.strip():
+        raise UploadError(
+            "Serveur Multiup introuvable : "
+            f"{json.dumps(data, ensure_ascii=False)}"
+        )
 
-        if not isinstance(value, str) or not value:
-            continue
+    # Corrige les éventuels slashs échappés renvoyés par l'API.
+    server = server.replace("\\/", "/").strip()
 
-        if value.startswith(("http://", "https://")):
-            return value.rstrip("/")
+    if not server.startswith(("http://", "https://")):
+        server = f"https://{server}"
 
-        return f"https://{value.strip('/')}"
-
-    raise UploadError(
-        "Serveur Multiup introuvable : "
-        f"{json.dumps(data, ensure_ascii=False)}"
-    )
+    # L'API renvoie déjà :
+    # https://cary.multiup.io/upload/index.php
+    #
+    # Il ne faut donc pas ajouter /upload/index.php ici.
+    return server.rstrip("/")
 
 
 def upload_multiup(path: Path, remote_name: str | None) -> str:
     user_id = multiup_login()
-    server = multiup_get_server()
+    upload_url = multiup_get_server()
     filename = safe_filename(remote_name or path.name)
 
-    upload_url = f"{server}/upload/index.php"
+    print(f"  Serveur Multiup : {upload_url}")
 
     with path.open("rb") as file_handle:
         response = http.post(
@@ -431,14 +464,23 @@ def upload_multiup(path: Path, remote_name: str | None) -> str:
 
     data = parse_json_response(response)
 
-    if data.get("error"):
-        raise UploadError(f"Multiup : {data['error']}")
+    # Multiup peut utiliser "error": "success" comme indicateur
+    # de réussite. Seules les autres valeurs sont considérées
+    # comme des erreurs.
+    error_value = str(data.get("error", "")).strip().lower()
+
+    if error_value and error_value not in {"success", "ok"}:
+        raise UploadError(
+            f"Multiup : {json.dumps(data, ensure_ascii=False)}"
+        )
 
     urls = collect_urls(data)
 
     if urls:
         return urls[0]
 
+    # Si aucune URL n'est trouvée, on conserve la réponse complète
+    # pour faciliter le diagnostic.
     return json.dumps(data, ensure_ascii=False)
 
 
@@ -534,17 +576,20 @@ def create_uncompressed_zip(
         compression=zipfile.ZIP_STORED,
     ) as archive:
         for file_path in files:
-            archive_name = file_path.name
+            archive_entry_name = file_path.name
             stem = file_path.stem
             suffix = file_path.suffix
             counter = 2
 
-            while archive_name in used_names:
-                archive_name = f"{stem}-{counter}{suffix}"
+            while archive_entry_name in used_names:
+                archive_entry_name = f"{stem}-{counter}{suffix}"
                 counter += 1
 
-            used_names.add(archive_name)
-            archive.write(file_path, arcname=archive_name)
+            used_names.add(archive_entry_name)
+            archive.write(
+                file_path,
+                arcname=archive_entry_name,
+            )
 
     return archive_path
 
@@ -571,7 +616,10 @@ def extract_zip_safely(
             if item.is_dir():
                 continue
 
-            target.parent.mkdir(parents=True, exist_ok=True)
+            target.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
 
             with archive.open(item) as source:
                 with target.open("wb") as output:
@@ -601,7 +649,10 @@ def run_reupload(
         )
 
         results.extend(
-            upload_to_providers(file_path, providers)
+            upload_to_providers(
+                file_path,
+                providers,
+            )
         )
 
     return results
@@ -638,7 +689,10 @@ def run_archive(
         f"ZIP créé sans compression : {archive_path.name}"
     )
 
-    return upload_to_providers(archive_path, providers)
+    return upload_to_providers(
+        archive_path,
+        providers,
+    )
 
 
 def run_desarchive(
@@ -669,7 +723,10 @@ def run_desarchive(
             )
 
             results.extend(
-                upload_to_providers(archive_path, providers)
+                upload_to_providers(
+                    archive_path,
+                    providers,
+                )
             )
 
             continue
@@ -684,7 +741,10 @@ def run_desarchive(
 
         for file_path in extracted_files:
             results.extend(
-                upload_to_providers(file_path, providers)
+                upload_to_providers(
+                    file_path,
+                    providers,
+                )
             )
 
     return results
@@ -738,7 +798,10 @@ def main() -> int:
 
     try:
         urls = read_urls(args.urls)
-        names = read_names(args.names, len(urls))
+        names = read_names(
+            args.names,
+            len(urls),
+        )
         providers = parse_providers(args.providers)
 
         with tempfile.TemporaryDirectory(
@@ -781,11 +844,14 @@ def main() -> int:
         )
 
         failed = sum(
-            1 for result in results
+            1
+            for result in results
             if not result["success"]
         )
 
-        print(f"Résultats enregistrés dans {args.output}")
+        print(
+            f"Résultats enregistrés dans {args.output}"
+        )
 
         if failed:
             print(
@@ -798,7 +864,11 @@ def main() -> int:
         return 0
 
     except Exception as error:
-        print(f"Erreur : {error}", file=sys.stderr)
+        print(
+            f"Erreur : {error}",
+            file=sys.stderr,
+        )
+
         return 1
 
 
