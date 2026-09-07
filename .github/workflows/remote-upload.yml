@@ -61,3 +61,11 @@ jobs:
             --urls urls.txt \
             --names names.txt \
             --output upload-results.json
+
+      - name: Afficher les résultats
+        if: always()
+        run: |
+          if [ -f upload-results.json ]; then
+            cat upload-results.json
+          fi
+           
