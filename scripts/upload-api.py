@@ -38,7 +38,7 @@ MULTIUP_FASTEST_SERVER_ENDPOINT = (
 MULTIUP_LOGIN_ENDPOINT = "https://multiup.io/api/login"
 
 UPLOADG_BASE_URL = "https://uploadg.com/api/v1"
-UPLOADG_CHUNK_SIZE = 50 * 1024 * 1024
+UPLOADG_CHUNK_SIZE = 25 * 1024 * 1024
 UPLOADG_MAX_PARTS = 10_000
 
 USER_AGENT = "Mozilla/5.0"
@@ -53,15 +53,23 @@ ESCAPE_TOKEN = "<echap>"
 BLOCKED_EXTENSIONS = {
     ".php", ".php3", ".php4", ".php5", ".phtml",
     ".html", ".htm", ".js", ".mjs", ".cjs",
-    ".exe", ".dll", ".com", ".scr", ".msi", ".apk",
-    ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1",
-    ".py", ".pl", ".rb", ".cgi", ".jar", ".class",
-    ".vbs", ".wsf",
+    ".exe", ".dll", ".com", ".scr", ".msi",
+    ".apk", ".sh", ".bash", ".zsh", ".bat",
+    ".cmd", ".ps1", ".py", ".pl", ".rb",
+    ".cgi", ".jar", ".class", ".vbs", ".wsf",
 }
 
 ARCHIVE_SUFFIXES = (
-    ".tar.gz", ".tar.bz2", ".tar.xz", ".zip", ".7z",
-    ".rar", ".tar", ".tgz", ".tbz2", ".txz",
+    ".tar.gz",
+    ".tar.bz2",
+    ".tar.xz",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".tgz",
+    ".tbz2",
+    ".txz",
 )
 
 Uploader = Callable[[Path, str, int], tuple[str, int]]
@@ -127,7 +135,7 @@ def filename_from_response(
 
 
 def parse_urls(value: str) -> list[str]:
-    urls = []
+    urls: list[str] = []
 
     for url in re.findall(r"https?://[^\s]+", value, re.IGNORECASE):
         url = url.strip().rstrip(",;")
@@ -210,6 +218,20 @@ def is_archive(path: Path) -> bool:
     return path.name.lower().endswith(ARCHIVE_SUFFIXES)
 
 
+def upload_timeout(timeout: int) -> tuple[int, None]:
+    """
+    Timeout réseau pour les uploads.
+
+    Le délai de connexion est limité, mais aucun délai de lecture/écriture
+    n'est imposé pendant l'envoi du fichier.
+    """
+    return max(timeout, 60), None
+
+
+# ============================================================================
+# Réponses API
+# ============================================================================
+
 def response_json(
     response: requests.Response,
     service: str,
@@ -244,8 +266,8 @@ def is_success_error(value: Any) -> bool:
 
 def find_upload_url(payload: dict[str, Any]) -> str | None:
     direct_keys = (
-        "url",
         "link",
+        "url",
         "downloadPage",
         "downloadUrl",
         "directLink",
@@ -347,7 +369,11 @@ def download_url(
     ) as response:
         response.raise_for_status()
 
-        filename = filename_from_response(response, response.url)
+        filename = filename_from_response(
+            response,
+            response.url,
+        )
+
         destination = unique_download_path(
             destination_dir,
             filename,
@@ -424,7 +450,10 @@ def safe_path(root: Path, member_name: str) -> Path:
     return target
 
 
-def extract_zip(archive: Path, output: Path) -> None:
+def extract_zip(
+    archive: Path,
+    output: Path,
+) -> None:
     with zipfile.ZipFile(archive) as zip_file:
         for info in zip_file.infolist():
             destination = safe_path(output, info.filename)
@@ -440,7 +469,10 @@ def extract_zip(archive: Path, output: Path) -> None:
                     shutil.copyfileobj(source, target)
 
 
-def extract_tar(archive: Path, output: Path) -> None:
+def extract_tar(
+    archive: Path,
+    output: Path,
+) -> None:
     with tarfile.open(archive, "r:*") as tar_file:
         for member in tar_file.getmembers():
             destination = safe_path(output, member.name)
@@ -496,17 +528,26 @@ def extract_7z_or_rar(
 ) -> None:
     output.mkdir(parents=True, exist_ok=True)
 
-    run_7z(["7z", "t", str(archive), "-bd"])
+    run_7z(
+        [
+            "7z",
+            "t",
+            str(archive),
+            "-bd",
+        ]
+    )
 
-    run_7z([
-        "7z",
-        "x",
-        str(archive),
-        f"-o{output}",
-        "-y",
-        "-aoa",
-        "-bd",
-    ])
+    run_7z(
+        [
+            "7z",
+            "x",
+            str(archive),
+            f"-o{output}",
+            "-y",
+            "-aoa",
+            "-bd",
+        ]
+    )
 
     root = output.resolve()
 
@@ -530,15 +571,17 @@ def extract_archive(
         extract_zip(archive, output)
         return
 
-    if archive_name.endswith((
-        ".tar",
-        ".tar.gz",
-        ".tgz",
-        ".tar.bz2",
-        ".tbz2",
-        ".tar.xz",
-        ".txz",
-    )):
+    if archive_name.endswith(
+        (
+            ".tar",
+            ".tar.gz",
+            ".tgz",
+            ".tar.bz2",
+            ".tbz2",
+            ".tar.xz",
+            ".txz",
+        )
+    ):
         extract_tar(archive, output)
         return
 
@@ -620,6 +663,7 @@ def get_gofile_server(timeout: int) -> str:
         timeout=timeout,
         headers={"User-Agent": USER_AGENT},
     )
+
     response.raise_for_status()
 
     payload = response_json(response, "GoFile")
@@ -657,14 +701,19 @@ def upload_gofile(
     token = os.environ.get("GOFILE_TOKEN", "").strip()
     folder_id = os.environ.get("GOFILE_FOLDER_ID", "").strip()
 
-    headers = {"User-Agent": USER_AGENT}
-    data: dict[str, str] = {}
+    headers = {
+        "User-Agent": USER_AGENT,
+    }
 
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
+    data: dict[str, str] = {}
+
     if folder_id:
         data["folderId"] = folder_id
+
+    print("[GOFILE] Méthode : POST")
 
     with file_path.open("rb") as file:
         response = requests.post(
@@ -674,14 +723,15 @@ def upload_gofile(
                     filename,
                     file,
                     content_type_for(filename),
-                ),
+                )
             },
             data=data,
             headers=headers,
-            timeout=(timeout, 3600),
+            timeout=upload_timeout(timeout),
         )
 
     response.raise_for_status()
+
     payload = response_json(response, "GoFile")
 
     if payload.get("status") not in (None, "ok"):
@@ -710,76 +760,40 @@ def upload_fileditch(
     filename: str,
     timeout: int,
 ) -> tuple[str, int]:
-    """
-    Upload brut FileDitch.
-
-    FileDitch recommande PUT avec le fichier dans le corps de la requête.
-    Cette méthode évite l'ancien upload multipart qui provoquait les 403.
-    """
-    file_size = file_path.stat().st_size
-
-    if file_size <= 0:
-        raise ValueError(f"Le fichier est vide : {filename}")
+    print("[FILEDITCH] Méthode : POST")
 
     with file_path.open("rb") as file:
-        response = requests.put(
+        response = requests.post(
             FILEDITCH_ENDPOINT,
             params={"filename": filename},
             data=file,
             headers={
-                "Content-Type": "application/octet-stream",
+                "Content-Type": content_type_for(filename),
                 "X-Filename": filename,
                 "User-Agent": USER_AGENT,
             },
-            timeout=(timeout, 3600),
+            timeout=upload_timeout(timeout),
         )
 
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = None
+    response.raise_for_status()
 
-    if response.status_code >= 400:
-        if isinstance(payload, dict):
-            error_message = payload.get("error") or str(payload)
-        else:
-            error_message = response.text.strip() or response.reason
+    payload = response_json(response, "FileDitch")
 
-        retry_after = response.headers.get("Retry-After")
-
-        if retry_after:
-            error_message += f" ; Retry-After: {retry_after}"
-
-        raise RuntimeError(
-            f"FileDitch HTTP {response.status_code} : {error_message}"
-        )
-
-    if not isinstance(payload, dict):
-        raise RuntimeError(
-            "Réponse FileDitch invalide : "
-            f"{response.text}"
-        )
-
-    if payload.get("success") is not True:
+    if not payload.get("success"):
         raise RuntimeError(
             f"FileDitch a refusé l'upload : {payload}"
         )
 
-    url = payload.get("url")
+    url = find_upload_url(payload)
 
-    if not isinstance(url, str) or not url.strip():
+    if not url:
         raise RuntimeError(
             f"FileDitch n'a pas retourné d'URL : {payload}"
         )
 
-    returned_size = payload.get("size", file_size)
+    size = payload.get("size", file_path.stat().st_size)
 
-    try:
-        returned_size = int(returned_size)
-    except (TypeError, ValueError):
-        returned_size = file_size
-
-    return url, returned_size
+    return url, int(size or file_path.stat().st_size)
 
 
 # ============================================================================
@@ -792,6 +806,7 @@ def get_multiup_upload_endpoint(timeout: int) -> str:
         timeout=timeout,
         headers={"User-Agent": USER_AGENT},
     )
+
     response.raise_for_status()
 
     payload = response_json(response, "MultiUp")
@@ -805,7 +820,7 @@ def get_multiup_upload_endpoint(timeout: int) -> str:
 
     if not isinstance(endpoint, str) or not endpoint.strip():
         raise RuntimeError(
-            f"Serveur MultiUp absent : {payload}"
+            f"Le champ server est absent de la réponse MultiUp : {payload}"
         )
 
     endpoint = endpoint.strip()
@@ -813,7 +828,7 @@ def get_multiup_upload_endpoint(timeout: int) -> str:
 
     if parsed_endpoint.scheme not in {"http", "https"}:
         raise RuntimeError(
-            f"Schéma invalide pour MultiUp : {endpoint}"
+            f"Schéma invalide pour l'endpoint MultiUp : {endpoint}"
         )
 
     if not parsed_endpoint.netloc:
@@ -847,6 +862,7 @@ def get_multiup_user(timeout: int) -> str | None:
         timeout=timeout,
         headers={"User-Agent": USER_AGENT},
     )
+
     response.raise_for_status()
 
     payload = response_json(response, "MultiUp")
@@ -860,7 +876,7 @@ def get_multiup_user(timeout: int) -> str | None:
 
     if user_id is None:
         raise RuntimeError(
-            f"Identifiant MultiUp absent : {payload}"
+            f"MultiUp n'a pas retourné d'identifiant utilisateur : {payload}"
         )
 
     return str(user_id)
@@ -879,6 +895,9 @@ def upload_multiup(
     if user_id:
         data["user"] = user_id
 
+    print("[MULTIUP] Méthode : POST")
+    print(f"[MULTIUP] Endpoint : {endpoint}")
+
     with file_path.open("rb") as file:
         response = requests.post(
             endpoint,
@@ -887,14 +906,19 @@ def upload_multiup(
                     filename,
                     file,
                     content_type_for(filename),
-                ),
+                )
             },
             data=data,
-            timeout=(timeout, 3600),
-            headers={"User-Agent": USER_AGENT},
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+                "Connection": "keep-alive",
+            },
+            timeout=upload_timeout(timeout),
         )
 
     response.raise_for_status()
+
     payload = response_json(response, "MultiUp")
 
     if not is_success_error(payload.get("error")):
@@ -928,17 +952,20 @@ def uploadg_api(
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
+        "Content-Type": "application/json",
     }
 
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
 
+    # POST : appels API UploadG de contrôle
     response = requests.post(
         f"{UPLOADG_BASE_URL}{path}",
         headers=headers,
         json=payload,
-        timeout=timeout,
+        timeout=max(timeout, 60),
     )
+
     response.raise_for_status()
 
     return response_json(response, "UploadG")
@@ -974,17 +1001,21 @@ def upload_uploadg(
             "L'upload multipart nécessite entre 1 et 10 000 parties."
         )
 
+    create_key = os.urandom(16).hex()
+    complete_key = os.urandom(16).hex()
+    entry_key = os.urandom(16).hex()
+
     session = uploadg_api(
-        "/s3/multipart/create",
-        {
+        path="/s3/multipart/create",
+        payload={
             "filename": filename,
             "mime": mime,
             "size": size,
             "extension": extension,
         },
-        token,
-        timeout,
-        os.urandom(16).hex(),
+        token=token,
+        timeout=timeout,
+        idempotency_key=create_key,
     )
 
     try:
@@ -993,7 +1024,7 @@ def upload_uploadg(
         upload_token = session["uploadToken"]
     except KeyError as error:
         raise RuntimeError(
-            f"Réponse UploadG invalide : {session}"
+            f"Réponse de création UploadG invalide : {session}"
         ) from error
 
     assembled = False
@@ -1001,7 +1032,11 @@ def upload_uploadg(
 
     try:
         with file_path.open("rb") as source:
-            for batch_start in range(1, total_parts + 1, 100):
+            for batch_start in range(
+                1,
+                total_parts + 1,
+                100,
+            ):
                 part_numbers = list(
                     range(
                         batch_start,
@@ -1010,22 +1045,22 @@ def upload_uploadg(
                 )
 
                 signed = uploadg_api(
-                    "/s3/multipart/batch-sign-part-urls",
-                    {
+                    path="/s3/multipart/batch-sign-part-urls",
+                    payload={
                         "key": key,
                         "uploadId": upload_id,
                         "uploadToken": upload_token,
                         "partNumbers": part_numbers,
                     },
-                    token,
-                    timeout,
+                    token=token,
+                    timeout=timeout,
                 )
 
                 signed_urls = signed.get("urls")
 
                 if not isinstance(signed_urls, list):
                     raise RuntimeError(
-                        "URLs signées UploadG absentes."
+                        "UploadG n'a pas retourné de liste d'URLs signées."
                     )
 
                 urls: dict[int, str] = {}
@@ -1048,53 +1083,62 @@ def upload_uploadg(
 
                     if not url:
                         raise RuntimeError(
-                            f"URL absente pour la partie {part_number}."
+                            f"URL signée absente pour la partie "
+                            f"{part_number}."
                         )
 
                     chunk = source.read(UPLOADG_CHUNK_SIZE)
 
                     if not chunk:
                         raise IOError(
-                            "Fin inattendue du fichier."
+                            "Fin inattendue du fichier pendant l'upload."
                         )
 
+                    # PUT : obligatoire pour l'URL signée de la partie S3
                     response = requests.put(
                         url,
                         data=chunk,
-                        timeout=max(timeout, 300),
+                        headers={
+                            "Content-Length": str(len(chunk)),
+                        },
+                        timeout=upload_timeout(timeout),
                     )
+
                     response.raise_for_status()
 
                     etag = response.headers.get("ETag")
 
                     if not etag:
                         raise IOError(
-                            f"ETag absent pour la partie {part_number}."
+                            f"Aucun ETag retourné pour la partie "
+                            f"{part_number}."
                         )
 
-                    parts.append({
-                        "ETag": etag,
-                        "PartNumber": part_number,
-                    })
+                    parts.append(
+                        {
+                            "ETag": etag,
+                            "PartNumber": part_number,
+                        }
+                    )
 
         uploadg_api(
-            "/s3/multipart/complete",
-            {
+            path="/s3/multipart/complete",
+            payload={
                 "key": key,
                 "uploadId": upload_id,
                 "uploadToken": upload_token,
                 "parts": parts,
             },
-            token,
-            timeout,
-            os.urandom(16).hex(),
+            token=token,
+            timeout=timeout,
+            idempotency_key=complete_key,
         )
 
         assembled = True
 
         result = uploadg_api(
-            "/s3/entries",
-            {
+            path="/s3/entries",
+            payload={
                 "clientName": filename,
                 "clientExtension": extension,
                 "clientMime": mime,
@@ -1104,23 +1148,24 @@ def upload_uploadg(
                 "uploadToken": upload_token,
                 "size": size,
             },
-            token,
-            timeout,
-            os.urandom(16).hex(),
+            token=token,
+            timeout=timeout,
+            idempotency_key=entry_key,
         )
 
         file_entry = result.get("fileEntry")
 
         if not isinstance(file_entry, dict):
             raise RuntimeError(
-                f"fileEntry UploadG absent : {result}"
+                f"UploadG n'a pas retourné de fileEntry : {result}"
             )
 
         url = find_upload_url({"fileEntry": file_entry})
 
         if not url:
             raise RuntimeError(
-                f"URL UploadG absente : {result}"
+                "UploadG a terminé l'upload mais n'a pas retourné "
+                f"d'URL publique : {result}"
             )
 
         return url, size
@@ -1129,14 +1174,14 @@ def upload_uploadg(
         if not assembled:
             try:
                 uploadg_api(
-                    "/s3/multipart/abort",
-                    {
+                    path="/s3/multipart/abort",
+                    payload={
                         "key": key,
                         "uploadId": upload_id,
                         "uploadToken": upload_token,
                     },
-                    token,
-                    timeout,
+                    token=token,
+                    timeout=timeout,
                 )
             except Exception:
                 pass
@@ -1145,39 +1190,8 @@ def upload_uploadg(
 
 
 # ============================================================================
-# Gestion des tentatives
+# Traitement des uploads
 # ============================================================================
-
-def is_retryable_upload_error(error: Exception) -> bool:
-    """
-    Les erreurs 403, 400, 405 et 413 sont définitives.
-    Les erreurs réseau, 429 et erreurs serveur peuvent être retentées.
-    """
-    message = str(error).lower()
-
-    retryable_markers = (
-        "http 408",
-        "http 425",
-        "http 429",
-        "http 500",
-        "http 502",
-        "http 503",
-        "http 504",
-        "http 507",
-        "timeout",
-        "timed out",
-        "connection reset",
-        "connection aborted",
-        "connection refused",
-        "temporarily unavailable",
-        "temporary failure",
-    )
-
-    return any(
-        marker in message
-        for marker in retryable_markers
-    )
-
 
 def upload_with_retry(
     uploader: Uploader,
@@ -1218,32 +1232,19 @@ def upload_with_retry(
                 file=sys.stderr,
             )
 
-            if attempt >= MAX_ATTEMPTS:
-                break
+            if attempt < MAX_ATTEMPTS:
+                delay = attempt * RETRY_DELAY_SECONDS
 
-            if not is_retryable_upload_error(error):
                 print(
-                    "[UPLOAD] Erreur définitive, aucune nouvelle tentative.",
-                    file=sys.stderr,
+                    f"Nouvelle tentative dans {delay} secondes..."
                 )
-                break
 
-            delay = attempt * RETRY_DELAY_SECONDS
-
-            print(
-                f"Nouvelle tentative dans {delay} secondes..."
-            )
-
-            time.sleep(delay)
+                time.sleep(delay)
 
     raise RuntimeError(
         f"Échec définitif de l'upload de {filename} : {last_error}"
     )
 
-
-# ============================================================================
-# Modes de fonctionnement
-# ============================================================================
 
 def run_archive_mode(
     uploader: Uploader,
@@ -1255,7 +1256,7 @@ def run_archive_mode(
     if not urls:
         raise ValueError("Aucune URL à archiver.")
 
-    downloaded_files = []
+    downloaded_files: list[tuple[str, Path]] = []
 
     for url in urls:
         local_file = download_url(
@@ -1309,11 +1310,11 @@ def run_archive_mode(
 
     return [
         upload_with_retry(
-            uploader,
-            source_urls,
-            zip_path,
-            archive_filename,
-            timeout,
+            uploader=uploader,
+            source_url=source_urls,
+            file_path=zip_path,
+            filename=archive_filename,
+            timeout=timeout,
         )
     ]
 
@@ -1330,10 +1331,11 @@ def run_reupload_mode(
 
     if custom_names and len(custom_names) != len(urls):
         raise ValueError(
-            "Il faut fournir exactement un nom par URL."
+            "En mode re-upload, il faut fournir exactement "
+            "un nom par URL."
         )
 
-    uploads = []
+    uploads: list[dict[str, Any]] = []
     used_names: set[str] = set()
 
     for index, url in enumerate(urls):
@@ -1343,11 +1345,7 @@ def run_reupload_mode(
             timeout,
         )
 
-        custom_name = (
-            custom_names[index]
-            if custom_names
-            else None
-        )
+        custom_name = custom_names[index] if custom_names else None
 
         filename = unique_filename(
             custom_name or local_file.name,
@@ -1356,11 +1354,11 @@ def run_reupload_mode(
 
         uploads.append(
             upload_with_retry(
-                uploader,
-                url,
-                local_file,
-                filename,
-                timeout,
+                uploader=uploader,
+                source_url=url,
+                file_path=local_file,
+                filename=filename,
+                timeout=timeout,
             )
         )
 
@@ -1384,7 +1382,7 @@ def run_desarchive_mode(
         temporary_dir,
     )
 
-    uploads = []
+    uploads: list[dict[str, Any]] = []
     used_names: set[str] = set()
 
     for file_path in files:
@@ -1395,11 +1393,11 @@ def run_desarchive_mode(
 
         uploads.append(
             upload_with_retry(
-                uploader,
-                url,
-                file_path,
-                filename,
-                timeout,
+                uploader=uploader,
+                source_url=url,
+                file_path=file_path,
+                filename=filename,
+                timeout=timeout,
             )
         )
 
@@ -1413,8 +1411,8 @@ def run_desarchive_mode(
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Télécharge, archive, désarchive et ré-uploade "
-            "des fichiers."
+            "Télécharge, archive, désarchive, ré-uploade "
+            "et envoie des fichiers."
         )
     )
 
@@ -1446,7 +1444,7 @@ def parse_arguments() -> argparse.Namespace:
         "--filenames",
         help=(
             "Nom du ZIP final en mode archive. "
-            "En mode re-upload, un nom par URL."
+            "En mode re-upload, fournir un nom par URL."
         ),
     )
 
@@ -1491,7 +1489,7 @@ def validate_arguments(
 
     if args.mode == "archive" and len(custom_names) > 1:
         raise ValueError(
-            "Le mode archive accepte un seul nom."
+            "Le mode archive accepte un seul nom pour le ZIP global."
         )
 
     if args.mode == "re-upload":
@@ -1523,19 +1521,20 @@ UPLOADERS: dict[str, Uploader] = {
 
 def main() -> int:
     args = parse_arguments()
+
     urls = parse_urls(args.source_urls)
     uploader = UPLOADERS[args.api]
 
     try:
         custom_names = parse_custom_filenames(
-            args.filenames,
-            args.escape,
+            value=args.filenames,
+            escape_enabled=args.escape,
         )
 
         validate_arguments(
-            args,
-            urls,
-            custom_names,
+            args=args,
+            urls=urls,
+            custom_names=custom_names,
         )
 
         with tempfile.TemporaryDirectory(
@@ -1545,28 +1544,28 @@ def main() -> int:
 
             if args.mode == "archive":
                 uploads = run_archive_mode(
-                    uploader,
-                    urls,
-                    custom_names,
-                    args.timeout,
-                    temporary_dir,
+                    uploader=uploader,
+                    urls=urls,
+                    custom_names=custom_names,
+                    timeout=args.timeout,
+                    temporary_dir=temporary_dir,
                 )
 
             elif args.mode == "desarchive":
                 uploads = run_desarchive_mode(
-                    uploader,
-                    urls[0],
-                    args.timeout,
-                    temporary_dir,
+                    uploader=uploader,
+                    url=urls[0],
+                    timeout=args.timeout,
+                    temporary_dir=temporary_dir,
                 )
 
             else:
                 uploads = run_reupload_mode(
-                    uploader,
-                    urls,
-                    custom_names,
-                    args.timeout,
-                    temporary_dir,
+                    uploader=uploader,
+                    urls=urls,
+                    custom_names=custom_names,
+                    timeout=args.timeout,
+                    temporary_dir=temporary_dir,
                 )
 
     except Exception as error:
@@ -1592,9 +1591,9 @@ def main() -> int:
     github_output("file_url", uploads[-1]["url"])
 
     github_summary(
-        args.api,
-        args.mode,
-        uploads,
+        api=args.api,
+        mode=args.mode,
+        uploads=uploads,
     )
 
     print("\n" + "=" * 70)
