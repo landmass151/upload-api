@@ -23,7 +23,7 @@ import requests
 from tqdm import tqdm
 
 
-USER_AGENT = "Mozilla"
+USER_AGENT = "Mozilla/5.0"
 DEFAULT_TIMEOUT = 60
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 10
