@@ -17,9 +17,9 @@ from urllib.parse import quote, unquote, urlsplit
 import requests
 
 
-DOWNLOAD_TIMEOUT = (30, 3600)
-UPLOAD_TIMEOUT = (30, 3600)
-CHUNK_SIZE = 1024 * 1024
+DOWNLOAD_TIMEOUT = (60, 3600)
+UPLOAD_TIMEOUT = (60, 3600)
+CHUNK_SIZE = 10 * 1024 * 1024
 
 http = requests.Session()
 http.max_redirects = 10
