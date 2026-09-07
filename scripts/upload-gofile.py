@@ -8,15 +8,13 @@ from pathlib import Path
 import requests
 
 from upload_common import (
+    GOFILE_SERVERS_ENDPOINT,
     USER_AGENT,
     content_type_for,
     find_upload_url,
     main,
     response_json,
 )
-
-
-GOFILE_SERVERS_ENDPOINT = "https://api.gofile.io/servers"
 
 
 def get_gofile_server(timeout: int) -> str:
