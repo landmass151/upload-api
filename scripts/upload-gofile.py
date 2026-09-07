@@ -82,7 +82,7 @@ def upload_gofile(
                     filename,
                     file,
                     content_type_for(filename),
-                ),
+                )
             },
             data=data,
             headers=headers,
