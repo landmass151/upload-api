@@ -8,13 +8,15 @@ from pathlib import Path
 import requests
 
 from upload_common import (
-    GOFILE_SERVERS_ENDPOINT,
     USER_AGENT,
     content_type_for,
     find_upload_url,
     main,
     response_json,
 )
+
+
+GOFILE_SERVERS_ENDPOINT = "https://api.gofile.io/servers"
 
 
 def get_gofile_server(timeout: int) -> str:
@@ -38,8 +40,10 @@ def get_gofile_server(timeout: int) -> str:
 
         if isinstance(item, dict):
             for key in ("name", "server", "hostname"):
-                if item.get(key):
-                    return str(item[key])
+                value = item.get(key)
+
+                if value:
+                    return str(value)
 
     if data.get("server"):
         return str(data["server"])
@@ -60,7 +64,9 @@ def upload_gofile(
     token = os.environ.get("GOFILE_TOKEN", "").strip()
     folder_id = os.environ.get("GOFILE_FOLDER_ID", "").strip()
 
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {
+        "User-Agent": USER_AGENT,
+    }
 
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -78,7 +84,7 @@ def upload_gofile(
                     filename,
                     file,
                     content_type_for(filename),
-                )
+                ),
             },
             data=data,
             headers=headers,
@@ -106,7 +112,7 @@ def upload_gofile(
         file_path.stat().st_size,
     )
 
-    return url, int(size)
+    return url, int(size or file_path.stat().st_size)
 
 
 if __name__ == "__main__":
