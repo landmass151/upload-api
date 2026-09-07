@@ -5,7 +5,7 @@ from pathlib import Path
 import requests
 
 from upload_common import (
-    FILEDITCH_ENDPOINT
+    FILEDITCH_ENDPOINT,
     USER_AGENT,
     content_type_for,
     find_upload_url,
