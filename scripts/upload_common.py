@@ -672,6 +672,7 @@ def find_upload_url(
     nested_values = (
         payload.get("data"),
         payload.get("file"),
+        payload.get("fileEntry"),
         payload.get("files"),
         payload.get("result"),
     )
