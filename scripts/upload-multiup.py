@@ -121,12 +121,12 @@ def upload_multiup(
         data["user"] = user_id
     
     params = {
-        "1fichier.com": "true",
-        "fireload.com": "true",
-        "gofile.io": "true",
-        "hexload.com": "true",
-        "rapidgator.net": "true",
-        "vikingfile.com": "true",
+        "1fichier.com": true,
+        "fireload.com": true,
+        "gofile.io": true,
+        "hexload.com": true,
+        "rapidgator.net": true,
+        "vikingfile.com": true,
     }
     
     with file_path.open("rb") as file:
