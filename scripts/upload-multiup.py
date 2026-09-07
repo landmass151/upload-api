@@ -105,6 +105,7 @@ def get_multiup_user(timeout: int) -> str | None:
 
     return str(user_id)
 
+
 def upload_multiup(
     file_path: Path,
     filename: str,
@@ -113,30 +114,19 @@ def upload_multiup(
     """Envoie un fichier vers MultiUp."""
     endpoint = get_multiup_upload_endpoint(timeout)
     user_id = get_multiup_user(timeout)
-    
-    file_size = file_path.stat().st_size
-    
-    hosts_response = requests.get(
-        "https://multiup.io/api/get-list-hosts",
-        timeout=timeout,
-        headers={"User-Agent": USER_AGENT},
-    )
-    hosts_response.raise_for_status()
-    hosts_data = response_json(hosts_response, "MultiUp hosts")
-    hosts_dict = hosts_data.get("hosts", {})
-    
-    data: dict[str, str] = {}
-    
-    for host_name, host_info in hosts_dict.items():
-        host_max_size = int(host_info.get("size", 0))
-        host_max_size_bytes = host_max_size * 1024
-        
-        if file_size <= host_max_size_bytes or host_max_size == 0:
-            data[host_name] = "true"
-    
+
+    data: dict[str, str] = {
+        "1fichier.com": true,
+        "fireload.com": true,
+        "gofile.io": true,
+        "hexload.com": true,
+        "rapidgator.net": true,
+        "vikingfile.com": true,
+    }
+
     if user_id:
         data["user"] = user_id
-
+    
     with file_path.open("rb") as file:
         response = requests.post(
             endpoint,
