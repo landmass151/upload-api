@@ -22,6 +22,14 @@ from urllib.parse import unquote, urlparse
 import requests
 from tqdm import tqdm
 
+GOFILE_SERVERS_ENDPOINT = "https://api.gofile.io/servers"
+FILEDITCH_ENDPOINT = "https://new.fileditch.com/upload.php"
+
+MULTIUP_FASTEST_SERVER_ENDPOINT = (
+    "https://multiup.io/api/get-fastest-server"
+)
+
+MULTIUP_LOGIN_ENDPOINT = "https://multiup.io/api/login"
 
 USER_AGENT = "Mozilla/5.0"
 DEFAULT_TIMEOUT = 60
