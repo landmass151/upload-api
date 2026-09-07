@@ -31,7 +31,7 @@ MULTIUP_FASTEST_SERVER_ENDPOINT = (
 
 MULTIUP_LOGIN_ENDPOINT = "https://multiup.io/api/login"
 
-USER_AGENT = "Mozilla/5.0 (Android 15; Mobile; rv:136.0) Gecko/136.0 Firefox/136.0"
+USER_AGENT = "Mozilla"
 DEFAULT_TIMEOUT = 60
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 10
