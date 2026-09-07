@@ -115,7 +115,16 @@ def upload_multiup(
     endpoint = get_multiup_upload_endpoint(timeout)
     user_id = get_multiup_user(timeout)
 
-    data: dict[str, str] = {"host1": "false"}
+     hosts = {
+        "1fichier.com": "true",
+        "fireload.com": "true",
+        "gofile.io": "true",
+        "hexload.com": "true",
+        "rapidgator.net": "true",
+        "vikingfile.com": "true",
+    }
+
+    data: dict[str, str] = hosts.copy()
 
     if user_id:
         data["user"] = user_id
