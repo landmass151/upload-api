@@ -115,7 +115,7 @@ def upload_multiup(
     endpoint = get_multiup_upload_endpoint(timeout)
     user_id = get_multiup_user(timeout)
 
-    data: dict[str, str] = {}
+    data: dict[str, str] = {"host1": "true"}
 
     if user_id:
         data["user"] = user_id
