@@ -6,7 +6,9 @@ import requests
 
 from upload_common import (
     USER_AGENT,
+    content_type_for,
     main,
+    response_json,
 )
 
 
@@ -18,77 +20,51 @@ def upload_fileditch(
     filename: str,
     timeout: int,
 ) -> tuple[str, int]:
-    """Upload brut vers FileDitch avec l'API actuelle."""
-
-    if not file_path.is_file():
-        raise FileNotFoundError(
-            f"Fichier introuvable : {file_path}"
-        )
+    """Envoie un fichier à FileDitch avec l'API raw upload."""
 
     file_size = file_path.stat().st_size
 
-    if file_size == 0:
-        raise ValueError("FileDitch refuse les fichiers vides.")
-
     with file_path.open("rb") as file:
-        response = requests.post(
+        response = requests.put(
             FILEDITCH_ENDPOINT,
-            params={
-                "filename": filename,
-            },
+            params={"filename": filename},
             data=file,
             headers={
-                # Upload brut, comme indiqué dans la documentation.
-                "Content-Type": "application/octet-stream",
+                "Content-Type": content_type_for(filename),
                 "X-Filename": filename,
                 "User-Agent": USER_AGENT,
             },
-            timeout=(
-                timeout,
-                3600,
-            ),
+            # Timeout de connexion uniquement.
+            # L'API raw de FileDitch n'impose pas de durée maximale.
+            timeout=(timeout, None),
         )
 
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = {
-            "error": response.text[:1000],
-        }
+    response.raise_for_status()
 
-    if response.status_code == 403:
-        raise RuntimeError(
-            "FileDitch a bloqué ce fichier (HTTP 403). "
-            f"Réponse du serveur : {payload}"
-        )
-
-    if response.status_code == 429:
-        retry_after = response.headers.get("Retry-After", "inconnu")
-
-        raise RuntimeError(
-            "FileDitch limite les requêtes (HTTP 429). "
-            f"Retry-After : {retry_after}"
-        )
-
-    if response.status_code >= 400:
-        raise RuntimeError(
-            f"FileDitch a refusé l'upload "
-            f"(HTTP {response.status_code}) : {payload}"
-        )
+    payload = response_json(response, "FileDitch")
 
     if payload.get("success") is not True:
         raise RuntimeError(
-            f"Réponse FileDitch invalide : {payload}"
+            f"FileDitch a refusé l’upload : "
+            f"{payload.get('error', payload)}"
         )
 
     url = payload.get("url")
 
     if not isinstance(url, str) or not url:
         raise RuntimeError(
-            f"URL absente de la réponse FileDitch : {payload}"
+            f"FileDitch n’a pas retourné d’URL : {payload}"
         )
 
-    size = int(payload.get("size", file_size))
+    size = payload.get("size", file_size)
+
+    try:
+        size = int(size)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"Taille de fichier invalide retournée par FileDitch : "
+            f"{payload}"
+        ) from error
 
     return url, size
 
