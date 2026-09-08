@@ -8,7 +8,6 @@ from upload_common import (
     FILEDITCH_ENDPOINT,
     USER_AGENT,
     content_type_for,
-    find_upload_url,
     main,
     response_json,
 )
@@ -19,9 +18,18 @@ def upload_fileditch(
     filename: str,
     timeout: int,
 ) -> tuple[str, int]:
-    """Envoie un fichier vers FileDitch."""
+    """Envoie un fichier vers la nouvelle API FileDitch."""
+
+    if not file_path.is_file():
+        raise FileNotFoundError(f"Fichier introuvable : {file_path}")
+
+    file_size = file_path.stat().st_size
+
+    if file_size == 0:
+        raise ValueError("FileDitch refuse les fichiers vides.")
+
     with file_path.open("rb") as file:
-        response = requests.post(
+        response = requests.put(
             FILEDITCH_ENDPOINT,
             params={"filename": filename},
             data=file,
@@ -33,28 +41,41 @@ def upload_fileditch(
             timeout=(timeout, 3600),
         )
 
-    response.raise_for_status()
+    # Les erreurs FileDitch sont généralement renvoyées en JSON.
+    if not response.ok:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = response.text
+
+        raise RuntimeError(
+            f"FileDitch a refusé l'upload "
+            f"(HTTP {response.status_code}) : {payload}"
+        )
 
     payload = response_json(response, "FileDitch")
 
-    if not payload.get("success"):
+    if payload.get("success") is not True:
         raise RuntimeError(
-            f"FileDitch a refusé l'upload : {payload}"
+            f"Réponse inattendue de FileDitch : {payload}"
         )
 
-    url = find_upload_url(payload)
-
-    if not url:
+    url = payload.get("url")
+    if not isinstance(url, str) or not url:
         raise RuntimeError(
             f"FileDitch n'a pas retourné d'URL : {payload}"
         )
 
-    size = payload.get(
-        "size",
-        file_path.stat().st_size,
-    )
+    size = payload.get("size", file_size)
 
-    return url, int(size)
+    try:
+        size = int(size)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Taille invalide retournée par FileDitch : {payload}"
+        ) from exc
+
+    return url, size
 
 
 if __name__ == "__main__":
