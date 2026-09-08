@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
-from typing import Tuple
 
 import requests
 
 from upload_common import (
     USER_AGENT,
-    content_type_for,
     main,
 )
 
@@ -19,17 +17,12 @@ def upload_fileditch(
     file_path: Path,
     filename: str,
     timeout: int,
-) -> Tuple[str, int]:
-    """Upload brut vers la nouvelle API FileDitch."""
-
-    if not file_path.exists():
-        raise FileNotFoundError(
-            f"Fichier introuvable : {file_path}"
-        )
+) -> tuple[str, int]:
+    """Upload brut vers FileDitch avec l'API actuelle."""
 
     if not file_path.is_file():
-        raise ValueError(
-            f"Le chemin n'est pas un fichier : {file_path}"
+        raise FileNotFoundError(
+            f"Fichier introuvable : {file_path}"
         )
 
     file_size = file_path.stat().st_size
@@ -37,36 +30,45 @@ def upload_fileditch(
     if file_size == 0:
         raise ValueError("FileDitch refuse les fichiers vides.")
 
-    try:
-        with file_path.open("rb") as file:
-            response = requests.put(
-                FILEDITCH_ENDPOINT,
-                params={
-                    "filename": filename,
-                },
-                data=file,
-                headers={
-                    "Content-Type": content_type_for(filename),
-                    "X-Filename": filename,
-                    "User-Agent": USER_AGENT,
-                },
-                timeout=(
-                    timeout,
-                    3600,
-                ),
-            )
-    except requests.RequestException as error:
-        raise RuntimeError(
-            f"Erreur réseau pendant l'upload FileDitch : {error}"
-        ) from error
+    with file_path.open("rb") as file:
+        response = requests.post(
+            FILEDITCH_ENDPOINT,
+            params={
+                "filename": filename,
+            },
+            data=file,
+            headers={
+                # Upload brut, comme indiqué dans la documentation.
+                "Content-Type": "application/octet-stream",
+                "X-Filename": filename,
+                "User-Agent": USER_AGENT,
+            },
+            timeout=(
+                timeout,
+                3600,
+            ),
+        )
 
     try:
         payload = response.json()
-    except ValueError as error:
+    except ValueError:
+        payload = {
+            "error": response.text[:1000],
+        }
+
+    if response.status_code == 403:
         raise RuntimeError(
-            "FileDitch a retourné une réponse qui n'est pas du JSON : "
-            f"{response.text[:500]}"
-        ) from error
+            "FileDitch a bloqué ce fichier (HTTP 403). "
+            f"Réponse du serveur : {payload}"
+        )
+
+    if response.status_code == 429:
+        retry_after = response.headers.get("Retry-After", "inconnu")
+
+        raise RuntimeError(
+            "FileDitch limite les requêtes (HTTP 429). "
+            f"Retry-After : {retry_after}"
+        )
 
     if response.status_code >= 400:
         raise RuntimeError(
@@ -83,17 +85,10 @@ def upload_fileditch(
 
     if not isinstance(url, str) or not url:
         raise RuntimeError(
-            f"URL absente dans la réponse FileDitch : {payload}"
+            f"URL absente de la réponse FileDitch : {payload}"
         )
 
-    size = payload.get("size", file_size)
-
-    try:
-        size = int(size)
-    except (TypeError, ValueError) as error:
-        raise RuntimeError(
-            f"Taille invalide dans la réponse FileDitch : {payload}"
-        ) from error
+    size = int(payload.get("size", file_size))
 
     return url, size
 
